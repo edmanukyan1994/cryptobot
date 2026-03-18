@@ -70,6 +70,9 @@ async def run_ws_price_monitor(symbols: list[str]):
                                         price = float(ticker_data["lastPrice"])
                                         if price > 0:
                                             _prices[symbol] = price
+                                            try:
+                                                import collector; collector.update_ws_price(sym, price)
+                                            except: pass
                                             _last_update[symbol] = datetime.now(timezone.utc)
 
                             except (json.JSONDecodeError, KeyError, ValueError):

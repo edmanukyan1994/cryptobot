@@ -1,19 +1,12 @@
 import asyncio
 import aiohttp
-import json
 import logging
 from datetime import datetime, timezone
-from config import PRICE_INTERVAL, BYBIT_SYMBOL_MAP
+from config import PRICE_INTERVAL
 import db
+from ws_monitor import get_all_prices
 
 logger = logging.getLogger("collector")
-
-# Кэш цен из WebSocket (заполняется ws_monitor)
-_ws_prices: dict = {}
-
-def update_ws_price(symbol: str, price: float):
-    """Вызывается из ws_monitor при получении новой цены."""
-    _ws_prices[symbol] = price
 
 async def get_active_symbols() -> list:
     rows = await db.fetch("SELECT symbol FROM crypto_assets WHERE is_active=true ORDER BY rank")
@@ -39,17 +32,19 @@ async def run_price_collector():
 
     while True:
         try:
-            if _ws_prices:
+            prices = get_all_prices()
+            if prices:
                 ts = datetime.now(timezone.utc)
-                rows = [(sym, price, price, 0, 0, ts) for sym, price in _ws_prices.items()]
-                if rows:
-                    await db.executemany(
-                        """INSERT INTO crypto_prices_bybit
-                           (symbol, price, mark_price, volume_24h, price_change_24h, ts)
-                           VALUES ($1,$2,$3,$4,$5,$6)""",
-                        rows
-                    )
-                    logger.info(f"Prices saved: {len(rows)} symbols (WebSocket)")
+                rows = [(sym, price, price, 0.0, 0.0, ts) for sym, price in prices.items()]
+                await db.executemany(
+                    """INSERT INTO crypto_prices_bybit
+                       (symbol, price, mark_price, volume_24h, price_change_24h, ts)
+                       VALUES ($1,$2,$3,$4,$5,$6)""",
+                    rows
+                )
+                logger.info(f"Prices saved: {len(rows)} symbols")
+            else:
+                logger.warning("No WebSocket prices yet")
 
             fg_tick += 1
             if fg_tick >= 5:

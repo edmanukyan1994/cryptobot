@@ -7,9 +7,7 @@ from config import BYBIT_SYMBOL_MAP
 
 logger = logging.getLogger("ws_monitor")
 
-# Глобальный кэш цен — обновляется через WebSocket
 _prices: dict[str, float] = {}
-_last_update: dict[str, datetime] = {}
 
 def get_cached_price(symbol: str) -> float | None:
     return _prices.get(symbol)
@@ -22,35 +20,39 @@ BYBIT_WS_URL = "wss://stream.bybit.com/v5/public/linear"
 def _bybit_sym(symbol: str) -> str:
     return BYBIT_SYMBOL_MAP.get(symbol, f"{symbol}USDT")
 
-async def run_ws_price_monitor(symbols: list[str]):
-    """
-    WebSocket подключение к Bybit — получает цены в реальном времени.
-    Обновляет глобальный кэш _prices каждый тик.
-    """
-    logger.info(f"WebSocket price monitor starting for {len(symbols)} symbols")
+async def save_prices_to_db(prices: dict):
+    """Сохраняет цены из WebSocket напрямую в БД."""
+    import db
+    if not prices:
+        return
+    ts = datetime.now(timezone.utc)
+    rows = [(sym, price, price, 0, 0, ts) for sym, price in prices.items()]
+    try:
+        await db.executemany(
+            """INSERT INTO crypto_prices_bybit
+               (symbol, price, mark_price, volume_24h, price_change_24h, ts)
+               VALUES ($1,$2,$3,$4,$5,$6)""",
+            rows
+        )
+        logger.info(f"Prices saved: {len(rows)} symbols (WebSocket)")
+    except Exception as e:
+        logger.warning(f"Price save error: {e}")
 
-    # Подписываемся батчами по 10 символов
+async def run_ws_price_monitor(symbols: list[str]):
+    logger.info(f"WebSocket price monitor starting for {len(symbols)} symbols")
     topics = [f"tickers.{_bybit_sym(s)}" for s in symbols]
 
     while True:
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.ws_connect(
-                    BYBIT_WS_URL,
-                    heartbeat=20,
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as ws:
+                async with session.ws_connect(BYBIT_WS_URL, heartbeat=20) as ws:
                     logger.info("WebSocket connected to Bybit")
 
-                    # Подписываемся на все тикеры
                     for i in range(0, len(topics), 10):
-                        batch = topics[i:i+10]
-                        await ws.send_json({
-                            "op": "subscribe",
-                            "args": batch
-                        })
+                        await ws.send_json({"op": "subscribe", "args": topics[i:i+10]})
                         await asyncio.sleep(0.1)
 
+                    save_tick = 0
                     async for msg in ws:
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             try:
@@ -59,30 +61,28 @@ async def run_ws_price_monitor(symbols: list[str]):
                                     ticker_data = data.get("data", {})
                                     bybit_sym = data["topic"].replace("tickers.", "")
 
-                                    # Обратный маппинг
-                                    symbol = None
+                                    sym = None
                                     for s in symbols:
                                         if _bybit_sym(s) == bybit_sym:
-                                            symbol = s
+                                            sym = s
                                             break
 
-                                    if symbol and ticker_data.get("lastPrice"):
+                                    if sym and ticker_data.get("lastPrice"):
                                         price = float(ticker_data["lastPrice"])
                                         if price > 0:
-                                            _prices[symbol] = price
-                                            try:
-                                                import collector; collector.update_ws_price(sym, price)
-                                            except: pass
-                                            _last_update[symbol] = datetime.now(timezone.utc)
+                                            _prices[sym] = price
 
-                            except (json.JSONDecodeError, KeyError, ValueError):
+                            except Exception:
                                 pass
 
-                        elif msg.type == aiohttp.WSMsgType.ERROR:
-                            logger.warning(f"WebSocket error: {msg.data}")
+                        elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSED):
                             break
-                        elif msg.type == aiohttp.WSMsgType.CLOSED:
-                            break
+
+                        # Сохраняем в БД каждые 120 секунд
+                        save_tick += 1
+                        if save_tick >= 5000 and _prices:
+                            await save_prices_to_db(dict(_prices))
+                            save_tick = 0
 
         except asyncio.CancelledError:
             raise
@@ -91,13 +91,8 @@ async def run_ws_price_monitor(symbols: list[str]):
             await asyncio.sleep(5)
 
 async def run_fast_position_checker(check_callback):
-    """
-    Проверяет открытые позиции каждые 10 секунд используя WebSocket цены.
-    check_callback — функция из trader.py которая проверяет выходы.
-    """
     logger.info("Fast position checker started (10s interval)")
-    await asyncio.sleep(30)  # ждём пока WebSocket подключится
-
+    await asyncio.sleep(30)
     while True:
         try:
             if _prices:

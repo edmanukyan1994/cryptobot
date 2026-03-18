@@ -68,7 +68,8 @@ async def run_price_collector():
     logger.info("Price collector started")
     fg_tick = 0
 
-    async with aiohttp.ClientSession() as session:
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; CryptoBot/1.0)"}
+    async with aiohttp.ClientSession(headers=headers) as session:
         while True:
             try:
                 symbols = await get_active_symbols()

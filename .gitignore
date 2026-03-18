@@ -1,0 +1,6 @@
+.env
+data/
+bot/__pycache__/
+cryptobot_final/
+*.pyc
+.DS_Store

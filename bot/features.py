@@ -325,9 +325,27 @@ async def build_features(session, symbol: str):
 
     candle_pattern, candle_score = detect_candle(klines) if klines else ("none", 0.0)
 
-    # Используем новый алгоритм S/R с klines (HIGH/LOW данные)
+    # S/R анализ через новый движок (6 методов)
     if klines and len(klines) >= 20:
-        sup, res, sr_sig, sr_str = find_sr_proper(klines, current)
+        from sr_engine import (find_horizontal_levels, find_psychological_levels,
+                               find_ma_levels, find_fibonacci_levels,
+                               find_pivot_points, find_volume_profile, calc_confluence)
+        all_levels = []
+        for fn, args in [
+            (find_horizontal_levels, (klines, current)),
+            (find_psychological_levels, (current,)),
+            (find_ma_levels, (klines, current)),
+            (find_fibonacci_levels, (klines, current)),
+            (find_pivot_points, (klines, current)),
+            (find_volume_profile, (klines, current)),
+        ]:
+            r = fn(*args)
+            all_levels += r.get("supports", []) + r.get("resistances", [])
+        sr_result = calc_confluence(all_levels, current)
+        sup = sr_result["nearest_support"]["price"] if sr_result["nearest_support"] else None
+        res = sr_result["nearest_resistance"]["price"] if sr_result["nearest_resistance"] else None
+        sr_sig = sr_result["signal"]
+        sr_str = sr_result["signal_strength"]
     else:
         sup, res, sr_sig, sr_str = None, None, "neutral", 0.0
 

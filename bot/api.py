@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response
 import db
+import os
 
 app = FastAPI(title="CryptoBot API")
 
@@ -10,6 +12,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+BASE = os.path.dirname(__file__)
+
+@app.get("/")
+async def dashboard():
+    return FileResponse(os.path.join(BASE, 'dashboard.html'))
+
+@app.get("/manifest.json")
+async def manifest():
+    return FileResponse(os.path.join(BASE, 'manifest.json'), media_type='application/manifest+json')
+
+@app.get("/sw.js")
+async def service_worker():
+    return FileResponse(os.path.join(BASE, 'sw.js'), media_type='application/javascript')
+
+@app.get("/icon-192.png")
+async def icon192():
+    return FileResponse(os.path.join(BASE, 'icon-192.png'), media_type='image/png')
+
+@app.get("/icon-512.png")
+async def icon512():
+    return FileResponse(os.path.join(BASE, 'icon-512.png'), media_type='image/png')
 
 @app.get("/api/status")
 async def get_status():
@@ -92,10 +116,7 @@ async def get_balance_history():
     result = []
     for r in rows:
         cumulative += float(r["hourly_pnl"])
-        result.append({
-            "time": r["hour"].isoformat(),
-            "balance": round(cumulative, 2),
-        })
+        result.append({"time": r["hour"].isoformat(), "balance": round(cumulative, 2)})
     return result
 
 @app.get("/api/stats")
@@ -113,20 +134,10 @@ async def get_stats():
         GROUP BY close_reason ORDER BY total_pnl DESC
     """)
     return {
-        "total": total,
-        "wins": wins,
-        "losses": total - wins,
+        "total": total, "wins": wins, "losses": total - wins,
         "win_rate": round(wins / total * 100, 1),
         "total_pnl": round(float(total_pnl or 0), 2),
         "avg_win": round(float(avg_win or 0), 2),
         "avg_loss": round(float(avg_loss or 0), 2),
         "by_reason": [{"reason": r["close_reason"], "count": r["cnt"], "pnl": round(float(r["total_pnl"]), 2)} for r in by_reason],
     }
-
-from fastapi.responses import FileResponse
-import os
-
-@app.get("/")
-async def dashboard():
-    path = os.path.join(os.path.dirname(__file__), 'dashboard.html')
-    return FileResponse(os.path.abspath(path))

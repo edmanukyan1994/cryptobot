@@ -39,6 +39,7 @@ async def main():
         asyncio.create_task(run_ws_price_monitor(symbols), name="ws_monitor"),
         asyncio.create_task(run_fast_position_checker(fast_exit_check), name="fast_checker"),
         asyncio.create_task(run_telegram_commands(), name="tg_commands"),
+        asyncio.create_task(run_api(), name="api"),
     ]
 
     logger.info(f"Started {len(tasks)} modules")
@@ -57,3 +58,11 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+async def run_api():
+    import uvicorn
+    from api import app
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="warning")
+    server = uvicorn.Server(config)
+    await server.serve()

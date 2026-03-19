@@ -167,3 +167,28 @@ async def websocket_endpoint(websocket: WebSocket):
             await asyncio.sleep(2)
     except WebSocketDisconnect:
         pass
+
+@app.get("/api/test_bybit")
+async def test_bybit():
+    import aiohttp as _aiohttp
+    results = {}
+    async with _aiohttp.ClientSession() as s:
+        for path, params in [
+            ("/v5/market/tickers", {"category": "linear", "symbol": "BTCUSDT"}),
+            ("/v5/market/kline", {"category": "linear", "symbol": "BTCUSDT", "interval": "60", "limit": "5"}),
+            ("/v5/market/orderbook", {"category": "linear", "symbol": "BTCUSDT", "limit": "5"}),
+            ("/v5/market/time", {}),
+        ]:
+            try:
+                async with s.get("https://api.bybit.com" + path, params=params,
+                                 timeout=_aiohttp.ClientTimeout(total=5)) as r:
+                    ct = r.headers.get("content-type", "")
+                    if "json" in ct:
+                        data = await r.json()
+                        results[path] = {"status": r.status, "retCode": data.get("retCode"), "ok": True}
+                    else:
+                        text = await r.text()
+                        results[path] = {"status": r.status, "content_type": ct, "ok": False, "body": text[:200]}
+            except Exception as e:
+                results[path] = {"ok": False, "error": str(e)}
+    return results

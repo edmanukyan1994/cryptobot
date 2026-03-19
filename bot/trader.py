@@ -155,9 +155,15 @@ def check_entry(features: dict, forecast: dict, params: dict) -> tuple:
     sr_sig = features.get("sr_signal") or "neutral"
     sr_str = float(features.get("sr_strength") or 0)
     if direction == "short" and sr_sig == "bounce_support" and sr_str >= 30:
-        return False, "", "sr_support"
+        return False, "", "sr_support_blocks_short"
     if direction == "long" and sr_sig == "bounce_resistance" and sr_str >= 30:
-        return False, "", "sr_resistance"
+        return False, "", "sr_resistance_blocks_long"
+    if sr_sig == "neutral" or sr_str < 20:
+        return False, "", f"sr_no_signal({sr_sig})"
+    if direction == "short" and sr_sig not in ("bounce_resistance", "breakout_down"):
+        return False, "", f"sr_wrong_for_short({sr_sig})"
+    if direction == "long" and sr_sig not in ("bounce_support", "breakout_up"):
+        return False, "", f"sr_wrong_for_long({sr_sig})"
 
     # P10/P90 фильтр только в нейтральной зоне (both)
     # В trend режимах (long_only/short_only) цена может быть где угодно

@@ -128,5 +128,5 @@ import os
 
 @app.get("/")
 async def dashboard():
-    path = os.path.join(os.path.dirname(__file__), '..', 'dashboard.html')
+    path = os.path.join(os.path.dirname(__file__), 'dashboard.html')
     return FileResponse(os.path.abspath(path))

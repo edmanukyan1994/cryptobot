@@ -427,7 +427,7 @@ async def trading_cycle():
         # Умная проверка переоткрытия (без cooldown по времени)
         can_open, reentry_reason = await can_reenter(symbol, direction, forecast)
         if not can_open:
-            logger.debug(f"Reentry blocked {symbol}: {reentry_reason}")
+            logger.info(f"BLOCKED {symbol}: {reentry_reason}")
             continue
 
         # Нет противоположных позиций в одном секторе
@@ -461,7 +461,7 @@ async def trading_cycle():
         # Проверяем S/R сигнал
         sr_ok, sl_price, sr_reason = get_sr_entry_signal(sr_data, direction)
         if sr_data and not sr_ok:
-            logger.debug(f"SR blocked {symbol} {direction}: {sr_reason}")
+            logger.info(f"SR blocked {symbol} {direction}: {sr_reason}")
             continue
 
         trade = await open_trade(account, symbol, direction, price, params, forecast, sr_data)

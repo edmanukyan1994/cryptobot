@@ -18,6 +18,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("main")
 
+async def run_api():
+    import uvicorn
+    from api import app
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="warning")
+    server = uvicorn.Server(config)
+    await server.serve()
+
 async def main():
     logger.info("=" * 40)
     logger.info("  CRYPTOBOT v1.1 — Python Edition")
@@ -59,10 +66,3 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 
-
-async def run_api():
-    import uvicorn
-    from api import app
-    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="warning")
-    server = uvicorn.Server(config)
-    await server.serve()

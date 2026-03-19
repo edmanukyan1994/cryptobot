@@ -311,27 +311,8 @@ async def build_features(session, symbol: str):
     global_row = await db.fetchrow("SELECT btc_dominance FROM crypto_market_global WHERE id='latest'")
     btc_dom = float(global_row["btc_dominance"]) if global_row else 55.0
 
-    # Получаем свечи из БД (цены из WebSocket) вместо Bybit REST
-    price_rows_sr = await db.fetch(
-        "SELECT price, ts FROM crypto_prices_bybit WHERE symbol=$1 ORDER BY ts DESC LIMIT 500",
-        symbol
-    )
-    # Конвертируем в формат свечей (приближение из тиков)
-    klines = []
-    if len(price_rows_sr) >= 20:
-        # Группируем по ~10 минут (примерно 1 тик = 20 сек, 30 тиков = 10 мин)
-        chunk = 30
-        rows = list(reversed(price_rows_sr))
-        for i in range(0, len(rows) - chunk, chunk // 2):
-            chunk_prices = [float(r["price"]) for r in rows[i:i+chunk]]
-            if chunk_prices:
-                klines.append({
-                    "open": chunk_prices[0],
-                    "high": max(chunk_prices),
-                    "low": min(chunk_prices),
-                    "close": chunk_prices[-1],
-                    "volume": len(chunk_prices) * 100.0
-                })
+    # Получаем 200 свечей (1h) для S/R анализа
+    klines = await fetch_klines(session, symbol, interval="60", limit=200)
 
     rsi = calc_rsi(prices)
     macd, macd_sig, macd_hist = calc_macd(prices)

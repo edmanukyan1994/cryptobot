@@ -145,7 +145,7 @@ def check_entry(features: dict, forecast: dict, params: dict) -> tuple:
         return False, "", f"long_blocked(FG={fg:.0f}<30)"
 
     max_risk = float(params.get("max_risk_score") or 75)
-    if prob < min_prob:
+    if prob <= min_prob:
         return False, "", f"low_prob({prob:.0f}<{min_prob:.0f})"
     if conf < float(params.get("min_confidence") or 50):
         return False, "", f"low_conf({conf:.0f})"

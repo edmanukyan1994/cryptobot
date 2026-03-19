@@ -612,3 +612,32 @@ def get_sr_entry_signal(sr: dict, direction: str) -> tuple[bool, float, str]:
         return True, sl, f"sr_short({signal},str={strength:.0f},rr={rr:.1f})"
 
     return False, 0.0, "invalid_direction"
+
+
+# ============================================================
+# АЛИАСЫ ДЛЯ СОВМЕСТИМОСТИ С trader.py
+# ============================================================
+
+async def analyze_sr(session, symbol: str) -> dict | None:
+    """Алиас для analyze_sr_v2 — совместимость с trader.py."""
+    return await analyze_sr_v2(session, symbol)
+
+async def update_features_sr(symbol: str, sr_data: dict) -> None:
+    """Обновляет S/R данные в features таблице — совместимость с trader.py."""
+    if not sr_data:
+        return
+    try:
+        import db
+        await db.execute(
+            """UPDATE crypto_features_hourly
+               SET support_1=$1, resistance_1=$2, sr_signal=$3, sr_strength=$4
+               WHERE symbol=$5 AND ts=(SELECT MAX(ts) FROM crypto_features_hourly WHERE symbol=$5)""",
+            sr_data.get("nearest_support", {}).get("price") if sr_data.get("nearest_support") else None,
+            sr_data.get("nearest_resistance", {}).get("price") if sr_data.get("nearest_resistance") else None,
+            sr_data.get("signal", "neutral"),
+            float(sr_data.get("signal_strength") or 0),
+            symbol
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger("sr_engine_v2").warning(f"update_features_sr {symbol}: {e}")

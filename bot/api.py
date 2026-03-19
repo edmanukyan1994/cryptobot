@@ -122,3 +122,11 @@ async def get_stats():
         "avg_loss": round(float(avg_loss or 0), 2),
         "by_reason": [{"reason": r["close_reason"], "count": r["cnt"], "pnl": round(float(r["total_pnl"]), 2)} for r in by_reason],
     }
+
+from fastapi.responses import FileResponse
+import os
+
+@app.get("/")
+async def dashboard():
+    path = os.path.join(os.path.dirname(__file__), '..', 'dashboard.html')
+    return FileResponse(os.path.abspath(path))

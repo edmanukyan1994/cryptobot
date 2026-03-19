@@ -120,7 +120,7 @@ def get_allowed_direction(fg: float) -> str:
         return "short_only"
 
 def get_min_probability(fg: float) -> float:
-    return 65.0 if 30 <= fg < 50 else 55.0
+    return 65.0 if 30 <= fg < 50 else 51.0
 
 def check_entry(features: dict, forecast: dict, params: dict) -> tuple:
     if not features or not forecast:

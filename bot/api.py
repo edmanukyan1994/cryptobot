@@ -141,3 +141,29 @@ async def get_stats():
         "avg_loss": round(float(avg_loss or 0), 2),
         "by_reason": [{"reason": r["close_reason"], "count": r["cnt"], "pnl": round(float(r["total_pnl"]), 2)} for r in by_reason],
     }
+
+from fastapi import WebSocket, WebSocketDisconnect
+import asyncio
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            try:
+                account = await db.fetchrow("SELECT current_balance, initial_balance FROM crypto_demo_accounts WHERE is_active=true LIMIT 1")
+                open_trades = await db.fetchval("SELECT COUNT(*) FROM crypto_demo_trades WHERE status='open'")
+                fg = await db.fetchrow("SELECT value, label FROM crypto_fear_greed WHERE id='latest'")
+
+                await websocket.send_json({
+                    "type": "update",
+                    "balance": float(account["current_balance"]) if account else 0,
+                    "pnl": float(account["current_balance"] - account["initial_balance"]) if account else 0,
+                    "open_trades": open_trades,
+                    "fear_greed": {"value": float(fg["value"]), "label": fg["label"]} if fg else None,
+                })
+            except Exception as e:
+                pass
+            await asyncio.sleep(2)
+    except WebSocketDisconnect:
+        pass

@@ -473,11 +473,18 @@ async def run_trader():
     logger.info("Trader started")
     account = await get_account()
     if not account:
-        await db.execute(
-            "INSERT INTO crypto_demo_accounts (initial_balance,current_balance,telegram_chat_id,is_active) VALUES ($1,$1,$2,true)",
-            DEMO_INITIAL_BALANCE, TELEGRAM_CHAT_ID or ""
-        )
-        logger.info(f"Demo account created: ${DEMO_INITIAL_BALANCE:,.0f}")
+        count = await db.fetchval("SELECT COUNT(*) FROM crypto_demo_accounts")
+        if count == 0:
+            await db.execute(
+                "INSERT INTO crypto_demo_accounts (initial_balance,current_balance,telegram_chat_id,is_active) VALUES ($1,$1,$2,true)",
+                DEMO_INITIAL_BALANCE, TELEGRAM_CHAT_ID or ""
+            )
+            logger.info(f"Demo account created: ${DEMO_INITIAL_BALANCE:,.0f}")
+        else:
+            await db.execute(
+                "UPDATE crypto_demo_accounts SET is_active=true WHERE id=(SELECT id FROM crypto_demo_accounts ORDER BY created_at LIMIT 1)"
+            )
+            logger.info("Reactivated existing account")
         account = await get_account()
 
     if account:

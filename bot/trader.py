@@ -422,6 +422,8 @@ async def trading_cycle():
 
         should, direction, reason = check_entry(features, forecast, params)
         if not should:
+            if reason not in ("neutral_forecast", "no_data"):
+                logger.info(f"SKIP {symbol}: {reason}")
             continue
 
         # Умная проверка переоткрытия (без cooldown по времени)

@@ -544,7 +544,10 @@ async def analyze_sr_v2(session: aiohttp.ClientSession, symbol: str) -> dict | N
     if current_price <= 0:
         return None
 
-    # Запускаем все методы
+    # 200 свечей 1D для значимых уровней (второй слой)
+    candles_1d = await fetch_klines(session, symbol, interval="D", limit=200)
+
+    # Запускаем все методы на 1h
     horizontal = find_horizontal_levels(candles_1h, current_price)
     psychological = find_psychological_levels(current_price)
     ma_levels = find_ma_levels(candles_1h, current_price)
@@ -552,14 +555,42 @@ async def analyze_sr_v2(session: aiohttp.ClientSession, symbol: str) -> dict | N
     pivots = find_pivot_points(candles_1h, current_price)
     volume = find_volume_profile(candles_1h, current_price)
 
-    # Объединяем все уровни
+    # Дополнительные уровни с дневного таймфрейма (более значимые)
+    horizontal_1d = {"supports": [], "resistances": []}
+    ma_levels_1d = {"supports": [], "resistances": []}
+    fibonacci_1d = {"supports": [], "resistances": []}
+    volume_1d = {"supports": [], "resistances": []}
+
+    if candles_1d and len(candles_1d) >= 20:
+        horizontal_1d = find_horizontal_levels(candles_1d, current_price)
+        ma_levels_1d = find_ma_levels(candles_1d, current_price)
+        fibonacci_1d = find_fibonacci_levels(candles_1d, current_price)
+        volume_1d = find_volume_profile(candles_1d, current_price)
+        for lv in horizontal_1d["supports"] + horizontal_1d["resistances"]:
+            lv["strength"] *= 2.0
+            lv["method"] = "horizontal_1d"
+        for lv in ma_levels_1d["supports"] + ma_levels_1d["resistances"]:
+            lv["strength"] *= 2.0
+            lv["method"] = lv["method"] + "_1d"
+        for lv in fibonacci_1d["supports"] + fibonacci_1d["resistances"]:
+            lv["strength"] *= 1.5
+            lv["method"] = lv["method"] + "_1d"
+        for lv in volume_1d["supports"] + volume_1d["resistances"]:
+            lv["strength"] *= 1.8
+            lv["method"] = lv["method"] + "_1d"
+
+    # Объединяем все уровни (1h + 1D)
     all_levels = (
         horizontal["supports"] + horizontal["resistances"] +
         psychological["supports"] + psychological["resistances"] +
         ma_levels["supports"] + ma_levels["resistances"] +
         fibonacci["supports"] + fibonacci["resistances"] +
         pivots["supports"] + pivots["resistances"] +
-        volume["supports"] + volume["resistances"]
+        volume["supports"] + volume["resistances"] +
+        horizontal_1d["supports"] + horizontal_1d["resistances"] +
+        ma_levels_1d["supports"] + ma_levels_1d["resistances"] +
+        fibonacci_1d["supports"] + fibonacci_1d["resistances"] +
+        volume_1d["supports"] + volume_1d["resistances"]
     )
 
     result = calc_confluence(all_levels, current_price)

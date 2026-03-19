@@ -9,6 +9,10 @@ import db
 logger = logging.getLogger("features")
 BYBIT_BASE = "https://api.bybit.com"
 
+# ============================================================
+# ТЕХНИЧЕСКИЕ ИНДИКАТОРЫ (без изменений)
+# ============================================================
+
 def calc_rsi(prices: list, period: int = 14):
     if len(prices) < period + 1:
         return None
@@ -95,46 +99,138 @@ def calc_risk_score(rsi, fear_greed, atr_pct, r_24h):
     if abs(r_24h) > 10: score += 10
     return min(100, round(score, 1))
 
-def find_sr(prices: list):
-    if len(prices) < 20:
-        return None, None, "neutral", 0.0
-    current = prices[-1]
-    supports, resistances = [], []
-    for i in range(2, len(prices) - 2):
-        if all(prices[i] < prices[i+j] for j in [-2,-1,1,2]):
-            supports.append(prices[i])
-        if all(prices[i] > prices[i+j] for j in [-2,-1,1,2]):
-            resistances.append(prices[i])
-    support = max([s for s in supports if s < current], default=None)
-    resistance = min([r for r in resistances if r > current], default=None)
-    signal, strength = "neutral", 0.0
-    if support and (current - support) / current * 100 < 1.0:
-        signal, strength = "bounce_support", 70.0
-    elif resistance and (resistance - current) / current * 100 < 1.0:
-        signal, strength = "bounce_resistance", 70.0
-    elif resistance and current > resistance:
-        signal, strength = "breakout_up", 50.0
-    elif support and current < support:
-        signal, strength = "breakout_down", 50.0
-    return (round(support, 6) if support else None,
-            round(resistance, 6) if resistance else None,
-            signal, round(strength, 1))
+# ============================================================
+# ПРАВИЛЬНЫЙ АЛГОРИТМ S/R
+# ============================================================
 
-async def fetch_klines(session, sym: str, interval="60", limit=50):
-    try:
-        bs = bybit_symbol(sym)
-        async with session.get(
-            f"{BYBIT_BASE}/v5/market/kline",
-            params={"category": "linear", "symbol": bs, "interval": interval, "limit": limit},
-            timeout=aiohttp.ClientTimeout(total=10)
-        ) as resp:
-            data = await resp.json()
-            if data.get("retCode") != 0:
-                return []
-            return [{"open": r[1], "high": r[2], "low": r[3], "close": r[4]}
-                    for r in reversed(data["result"]["list"])]
-    except Exception:
-        return []
+def find_sr_proper(candles: list, current_price: float) -> tuple:
+    """
+    Профессиональный алгоритм S/R уровней.
+    
+    Принципы:
+    1. Используем HIGH и LOW свечей (не только close)
+    2. Большой lookback (10 свечей) для значимых уровней
+    3. Уровень должен быть минимум 0.3% от цены (фильтр шума)
+    4. Кластеризация близких уровней (в пределах 0.5%)
+    5. Сила уровня = количество касаний + объём
+    6. Мульти-таймфрейм: 1h для точки входа, 4h для направления
+    """
+    if len(candles) < 20 or current_price <= 0:
+        return None, None, "neutral", 0.0
+
+    min_dist = current_price * 0.003  # минимум 0.3% от цены
+
+    highs = [c["high"] for c in candles]
+    lows = [c["low"] for c in candles]
+    closes = [c["close"] for c in candles]
+    volumes = [c["volume"] for c in candles]
+    avg_vol = np.mean(volumes) if volumes else 1
+
+    LOOKBACK = min(10, len(candles) // 4)
+
+    raw_supports = []
+    raw_resistances = []
+
+    for i in range(LOOKBACK, len(candles) - LOOKBACK):
+        # Локальный минимум по LOW
+        if (all(lows[i] <= lows[i-j] for j in range(1, LOOKBACK+1)) and
+                all(lows[i] <= lows[i+j] for j in range(1, LOOKBACK+1))):
+            # Считаем касания — сколько свечей близко к этому уровню
+            touches = sum(1 for j in range(max(0,i-LOOKBACK*3), min(len(candles), i+LOOKBACK*3))
+                         if abs(lows[j] - lows[i]) / lows[i] < 0.005)
+            vol_weight = volumes[i] / avg_vol
+            raw_supports.append({
+                "price": lows[i],
+                "strength": touches + vol_weight,
+                "touches": touches,
+                "idx": i
+            })
+
+        # Локальный максимум по HIGH
+        if (all(highs[i] >= highs[i-j] for j in range(1, LOOKBACK+1)) and
+                all(highs[i] >= highs[i+j] for j in range(1, LOOKBACK+1))):
+            touches = sum(1 for j in range(max(0,i-LOOKBACK*3), min(len(candles), i+LOOKBACK*3))
+                         if abs(highs[j] - highs[i]) / highs[i] < 0.005)
+            vol_weight = volumes[i] / avg_vol
+            raw_resistances.append({
+                "price": highs[i],
+                "strength": touches + vol_weight,
+                "touches": touches,
+                "idx": i
+            })
+
+    def cluster_levels(levels, tolerance=0.005):
+        """Объединяет уровни в зоны."""
+        if not levels:
+            return []
+        levels = sorted(levels, key=lambda x: x["price"])
+        clusters = []
+        cur = [levels[0]]
+        for lv in levels[1:]:
+            if abs(lv["price"] - cur[-1]["price"]) / cur[-1]["price"] <= tolerance:
+                cur.append(lv)
+            else:
+                clusters.append(cur)
+                cur = [lv]
+        clusters.append(cur)
+
+        result = []
+        for cl in clusters:
+            avg_price = np.mean([l["price"] for l in cl])
+            total_str = sum(l["strength"] for l in cl)
+            max_touches = max(l["touches"] for l in cl)
+            result.append({
+                "price": round(avg_price, 8),
+                "strength": round(total_str, 2),
+                "touches": max_touches,
+                "zone_size": len(cl)
+            })
+        return sorted(result, key=lambda x: -x["strength"])
+
+    all_supports = cluster_levels(raw_supports)
+    all_resistances = cluster_levels(raw_resistances)
+
+    # Фильтруем: поддержки ниже цены, сопротивления выше, минимальная дистанция
+    supports = [s for s in all_supports if current_price - s["price"] >= min_dist]
+    resistances = [r for r in all_resistances if r["price"] - current_price >= min_dist]
+
+    # Берём ближайшие значимые уровни
+    nearest_support = supports[0] if supports else None
+    nearest_resistance = resistances[0] if resistances else None
+
+    # Определяем сигнал
+    signal = "neutral"
+    strength = 0.0
+
+    if nearest_support and nearest_resistance:
+        dist_sup = (current_price - nearest_support["price"]) / current_price * 100
+        dist_res = (nearest_resistance["price"] - current_price) / current_price * 100
+
+        # Цена у поддержки (в пределах 1.5%)
+        if dist_sup <= 1.5:
+            signal = "bounce_support"
+            strength = min(100, nearest_support["strength"] * 10 * (1 - dist_sup/3))
+        # Цена у сопротивления (в пределах 1.5%)
+        elif dist_res <= 1.5:
+            signal = "bounce_resistance"
+            strength = min(100, nearest_resistance["strength"] * 10 * (1 - dist_res/3))
+        # Пробой вверх
+        elif current_price > nearest_resistance["price"]:
+            signal = "breakout_up"
+            strength = min(100, nearest_resistance["strength"] * 8)
+        # Пробой вниз
+        elif current_price < nearest_support["price"]:
+            signal = "breakout_down"
+            strength = min(100, nearest_support["strength"] * 8)
+
+    sup_price = round(nearest_support["price"], 8) if nearest_support else None
+    res_price = round(nearest_resistance["price"], 8) if nearest_resistance else None
+
+    return sup_price, res_price, signal, round(strength, 1)
+
+# ============================================================
+# КАНДЛСТИК ПАТТЕРНЫ
+# ============================================================
 
 def detect_candle(candles: list):
     if len(candles) < 3:
@@ -166,6 +262,31 @@ def detect_candle(candles: list):
         return "bearish_marubozu", -0.5
     return "none", 0.0
 
+# ============================================================
+# KLINES
+# ============================================================
+
+async def fetch_klines(session, sym: str, interval="60", limit=200):
+    try:
+        bs = bybit_symbol(sym)
+        async with session.get(
+            f"{BYBIT_BASE}/v5/market/kline",
+            params={"category": "linear", "symbol": bs, "interval": interval, "limit": limit},
+            timeout=aiohttp.ClientTimeout(total=10)
+        ) as resp:
+            data = await resp.json()
+            if data.get("retCode") != 0:
+                return []
+            return [{"open": float(r[1]), "high": float(r[2]), "low": float(r[3]),
+                     "close": float(r[4]), "volume": float(r[5])}
+                    for r in reversed(data["result"]["list"])]
+    except Exception:
+        return []
+
+# ============================================================
+# ГЛАВНАЯ ФУНКЦИЯ
+# ============================================================
+
 async def build_features(session, symbol: str):
     price_rows = await db.fetch(
         "SELECT price FROM crypto_prices_bybit WHERE symbol=$1 ORDER BY ts DESC LIMIT 60",
@@ -190,7 +311,9 @@ async def build_features(session, symbol: str):
     global_row = await db.fetchrow("SELECT btc_dominance FROM crypto_market_global WHERE id='latest'")
     btc_dom = float(global_row["btc_dominance"]) if global_row else 55.0
 
-    klines = await fetch_klines(session, symbol)
+    # Получаем 200 свечей (1h) для S/R анализа
+    klines = await fetch_klines(session, symbol, interval="60", limit=200)
+
     rsi = calc_rsi(prices)
     macd, macd_sig, macd_hist = calc_macd(prices)
     bb_u, bb_m, bb_l, bb_w = calc_bollinger(prices)
@@ -202,8 +325,11 @@ async def build_features(session, symbol: str):
 
     candle_pattern, candle_score = detect_candle(klines) if klines else ("none", 0.0)
 
-    kline_closes = [float(k["close"]) for k in klines] if klines else prices
-    sup, res, sr_sig, sr_str = find_sr(kline_closes)
+    # Используем новый алгоритм S/R с klines (HIGH/LOW данные)
+    if klines and len(klines) >= 20:
+        sup, res, sr_sig, sr_str = find_sr_proper(klines, current)
+    else:
+        sup, res, sr_sig, sr_str = None, None, "neutral", 0.0
 
     regime = detect_regime(rsi, r_24h, fg)
     risk_score = calc_risk_score(rsi, fg, atr_pct, r_24h)

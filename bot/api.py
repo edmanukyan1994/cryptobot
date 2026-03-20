@@ -219,3 +219,9 @@ async def test_bybit():
             except Exception as e:
                 results[path] = {"ok": False, "error": str(e)}
     return results
+
+@app.get("/api/market_context")
+async def get_market_context():
+    from market_context import get_context
+    ctx = get_context()
+    return ctx if ctx else {"error": "Context not yet available"}

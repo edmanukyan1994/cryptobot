@@ -538,13 +538,24 @@ async def run_trader():
         account = await get_account()
 
     if account:
+        bal = float(account["current_balance"])
+        init = float(account["initial_balance"])
+        pnl = bal - init
+        pnl_pct = pnl / init * 100
+        sign = "+" if pnl >= 0 else ""
+        fg_row = await db.fetchrow("SELECT value, label FROM crypto_fear_greed WHERE id='latest'")
+        fg_val = float(fg_row["value"]) if fg_row else 0
+        fg_label = fg_row["label"] if fg_row else "Unknown"
+        direction_mode = get_allowed_direction(fg_val)
+        dir_emoji = "🟢" if direction_mode == "long_only" else "🔴" if direction_mode == "short_only" else "🟡"
+        open_cnt = await db.fetchval("SELECT COUNT(*) FROM crypto_demo_trades WHERE status='open'")
         await tg.send(
-            f"🤖 <b>Криптобот v1.1 запущен</b>\n\n"
-            f"💰 Баланс: ${float(account['current_balance']):,.0f}\n"
-            f"📋 Стратегия: FG-based direction\n"
-            f"  FG≥50 → LONG only\n"
-            f"  FG 30-49 → LONG+SHORT (prob≥65%)\n"
-            f"  FG<30 → SHORT only",
+            f"🤖 <b>Криптобот v1.1 перезапущен</b>\n\n"
+            f"💰 Баланс: ${bal:,.0f}\n"
+            f"📈 PnL: {sign}${pnl:,.0f} ({sign}{pnl_pct:.2f}%)\n"
+            f"📊 Открытых позиций: {open_cnt}\n"
+            f"😰 Fear & Greed: {fg_val:.0f} ({fg_label})\n"
+            f"{dir_emoji} Режим: {direction_mode}",
             account.get("telegram_chat_id") or TELEGRAM_CHAT_ID
         )
 

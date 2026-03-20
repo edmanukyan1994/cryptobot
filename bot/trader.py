@@ -34,8 +34,11 @@ async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool
 
     # 2. Прогноз должен быть уверенным (не borderline)
     prob = float(forecast.get("direction_probability") or 50)
-    if prob < 54:
-        return False, f"weak_signal({prob:.0f}%)"
+    fg = float(forecast.get("fear_greed") or 50) if forecast.get("fear_greed") else 50
+    # В режиме extreme fear (FG<35) разрешаем neutral прогноз если S/R сильный
+    min_prob = 51 if fg < 35 else 54
+    if prob < min_prob:
+        return False, f"weak_signal({prob:.0f}%<{min_prob}%)"
 
     # 3. Смотрим последнюю закрытую сделку по этому символу
     last_closed = await db.fetchrow(

@@ -154,10 +154,26 @@ def check_entry(features: dict, forecast: dict, params: dict) -> tuple:
 
     sr_sig = features.get("sr_signal") or "neutral"
     sr_str = float(features.get("sr_strength") or 0)
+    current_price = float(features.get("price") or 0)
+    support_1 = float(features.get("support_1") or 0)
+    resistance_1 = float(features.get("resistance_1") or 0)
+
+    # Блокируем противоположные S/R сигналы
     if direction == "short" and sr_sig == "bounce_support" and sr_str >= 30:
         return False, "", "sr_support_blocks_short"
     if direction == "long" and sr_sig == "bounce_resistance" and sr_str >= 30:
         return False, "", "sr_resistance_blocks_long"
+
+    # Фильтр дистанции — входим только когда цена вплотную к уровню (< 0.5%)
+    MAX_DIST = 0.5
+    if direction == "short" and resistance_1 > 0 and current_price > 0:
+        dist_to_res = (resistance_1 - current_price) / current_price * 100
+        if dist_to_res > MAX_DIST:
+            return False, "", f"dist_to_res_too_far({dist_to_res:.2f}%>{MAX_DIST}%)"
+    if direction == "long" and support_1 > 0 and current_price > 0:
+        dist_to_sup = (current_price - support_1) / current_price * 100
+        if dist_to_sup > MAX_DIST:
+            return False, "", f"dist_to_sup_too_far({dist_to_sup:.2f}%>{MAX_DIST}%)"
     # Мягкий S/R фильтр - только блокируем противоположные сигналы
     # bounce_support при SHORT и bounce_resistance при LONG уже заблокированы выше
 

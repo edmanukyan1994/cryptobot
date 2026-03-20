@@ -140,9 +140,9 @@ def check_entry(features: dict, forecast: dict, params: dict) -> tuple:
     direction = "long" if direction_raw == "up" else "short"
 
     if allowed == "long_only" and direction == "short":
-        return False, "", f"short_blocked(FG={fg:.0f}>=50)"
+        return False, "", f"short_blocked(FG={fg:.0f}<35=fear)"
     if allowed == "short_only" and direction == "long":
-        return False, "", f"long_blocked(FG={fg:.0f}<30)"
+        return False, "", f"long_blocked(FG={fg:.0f}>65=greed)"
 
     max_risk = float(params.get("max_risk_score") or 75)
     if prob < min_prob:
@@ -247,6 +247,23 @@ async def check_exit(trade, price, params):
         return True, "stop_loss", 100
     if has_tp1 and params.get("be_stop_after_tp1", True) and pnl_pct <= fee_pct:
         return True, "breakeven_stop", 100
+
+    # TP по S/R уровням (приоритет над процентным TP)
+    sr_features = await db.fetchrow(
+        "SELECT support_1, resistance_1 FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
+        trade["symbol"]
+    )
+    if sr_features:
+        if direction == "long" and sr_features["resistance_1"]:
+            sr_tp = float(sr_features["resistance_1"])
+            sr_tp_pct = (sr_tp - entry) / entry * 100
+            if not has_tp1 and sr_tp_pct >= 0.5 and price >= sr_tp * 0.998:
+                return True, "tp1_partial", float(params.get("tp1_close_pct") or 40)
+        elif direction == "short" and sr_features["support_1"]:
+            sr_tp = float(sr_features["support_1"])
+            sr_tp_pct = (entry - sr_tp) / entry * 100
+            if not has_tp1 and sr_tp_pct >= 0.5 and price <= sr_tp * 1.002:
+                return True, "tp1_partial", float(params.get("tp1_close_pct") or 40)
 
     tp1 = float(params.get("tp1_percent") or 2.0)
     if not has_tp1 and pnl_pct >= tp1:

@@ -1,21 +1,42 @@
+"""
+Forecaster v2 — расширенная модель прогнозирования.
+
+Новые факторы:
+1. btc_trend — глобальный тренд BTC (MA200/MA50 на 1D)
+2. volume_trend — тренд объёма (растущий объём = подтверждение движения)
+3. market_structure — структура рынка (HH/HL vs LH/LL)
+4. btc_correlation — корреляция монеты с BTC
+5. dominant_trend — общий режим рынка (bull/bear/neutral)
+"""
 import asyncio
 import math
 import logging
 from datetime import datetime, timezone
 from config import FORECAST_INTERVAL
 import db
+from market_context import get_context
 
 logger = logging.getLogger("forecaster")
 
 HORIZONS = {"1h": 1, "4h": 4, "24h": 24}
+
+# Обновлённые веса с новыми факторами
 BASE_WEIGHTS = {
-    "momentum": 0.27, "rsi": 0.16, "sr": 0.12,
-    "bollinger": 0.11, "macd": 0.11, "candlestick": 0.10,
-    "fear_greed": 0.09, "regime": 0.04,
+    "momentum":        0.20,  # снизили с 0.27
+    "rsi":             0.13,  # снизили с 0.16
+    "sr":              0.13,  # повысили с 0.12
+    "bollinger":       0.09,  # снизили с 0.11
+    "macd":            0.09,  # снизили с 0.11
+    "candlestick":     0.08,  # снизили с 0.10
+    "fear_greed":      0.07,  # снизили с 0.09
+    "regime":          0.03,  # снизили с 0.04
+    # Новые факторы
+    "btc_trend":       0.08,  # тренд BTC на дневном
+    "volume_trend":    0.05,  # тренд объёма
+    "market_structure":0.05,  # HH/HL структура
 }
 
 def f(v):
-    """Конвертирует Decimal/None в float."""
     return float(v) if v is not None else None
 
 async def get_weights(symbol: str, horizon: str) -> dict:
@@ -30,6 +51,10 @@ async def get_weights(symbol: str, horizon: str) -> dict:
         if k not in w:
             w[k] = 1.0
     return w
+
+# ============================================================
+# СУЩЕСТВУЮЩИЕ ФАКТОРЫ (без изменений)
+# ============================================================
 
 def score_momentum(r_1h, r_24h, regime):
     bull, bear = 0.0, 0.0
@@ -88,6 +113,7 @@ def score_candlestick(score):
 def score_fear_greed(fg):
     if fg is None: return 0.0, 0.0
     bull, bear = 0.0, 0.0
+    # Контрарианский подход: extreme fear = потенциальный отскок
     if fg <= 15: bull += 0.8; bear += 0.4
     elif fg <= 25: bull += 0.4; bear += 0.3
     elif fg >= 80: bear += 0.8
@@ -95,9 +121,15 @@ def score_fear_greed(fg):
     return bull, bear
 
 def score_regime(regime):
-    m = {"bullish": (0.8, 0.0), "bearish": (0.0, 0.8), "crash": (0.0, 1.0),
-         "oversold_crash": (0.2, 0.6), "euphoria": (0.0, 0.7),
-         "consolidation": (0.1, 0.1), "neutral": (0.0, 0.0)}
+    m = {
+        "bullish":       (0.8, 0.0),
+        "bearish":       (0.0, 0.8),
+        "crash":         (0.0, 1.0),
+        "oversold_crash":(0.2, 0.6),
+        "euphoria":      (0.0, 0.7),
+        "consolidation": (0.1, 0.1),
+        "neutral":       (0.0, 0.0),
+    }
     return m.get(regime, (0.0, 0.0))
 
 def score_sr(price, support, resistance, sr_signal):
@@ -109,6 +141,143 @@ def score_sr(price, support, resistance, sr_signal):
     if support and price > 0 and (price - support) / price * 100 < 1.0: bull += 0.4
     if resistance and price > 0 and (resistance - price) / price * 100 < 1.0: bear += 0.4
     return min(bull, 1.2), min(bear, 1.2)
+
+# ============================================================
+# НОВЫЕ ФАКТОРЫ
+# ============================================================
+
+def score_btc_trend(ctx: dict) -> tuple:
+    """
+    Тренд BTC на дневном таймфрейме.
+    Самый важный фактор для альткоинов.
+    Если BTC ниже MA200 на дневном → медвежий рынок.
+    """
+    bull, bear = 0.0, 0.0
+    
+    if not ctx:
+        return 0.0, 0.0
+    
+    global_regime = ctx.get("global_regime", "neutral")
+    above_ma200_1d = ctx.get("above_ma200_1d")
+    above_ma50_1d = ctx.get("above_ma50_1d")
+    above_ma20_4h = ctx.get("above_ma20_4h")
+    btc_24h = ctx.get("btc_24h_change", 0)
+    price_structure = ctx.get("price_structure_1d", "neutral")
+    trend_strength = ctx.get("trend_strength", 0) / 100
+    
+    # Глобальный режим
+    if global_regime == "bull_market":
+        bull += 1.0 * trend_strength
+    elif global_regime == "mild_bull":
+        bull += 0.5 * trend_strength
+    elif global_regime == "bear_market":
+        bear += 1.0 * trend_strength
+    elif global_regime == "mild_bear":
+        bear += 0.5 * trend_strength
+    
+    # MA200 — самый важный уровень
+    if above_ma200_1d is True:
+        bull += 0.5
+    elif above_ma200_1d is False:
+        bear += 0.5
+    
+    # MA50
+    if above_ma50_1d is True:
+        bull += 0.3
+    elif above_ma50_1d is False:
+        bear += 0.3
+    
+    # Краткосрочный тренд (4H MA20)
+    if above_ma20_4h is True:
+        bull += 0.2
+    elif above_ma20_4h is False:
+        bear += 0.2
+    
+    # Структура цены
+    if price_structure == "uptrend":
+        bull += 0.3
+    elif price_structure == "downtrend":
+        bear += 0.3
+    
+    # 24h изменение BTC
+    if btc_24h > 3:
+        bull += 0.4
+    elif btc_24h > 1:
+        bull += 0.2
+    elif btc_24h < -3:
+        bear += 0.4
+    elif btc_24h < -1:
+        bear += 0.2
+    
+    return min(bull, 1.5), min(bear, 1.5)
+
+def score_volume_trend(ctx: dict, r_1h: float, r_24h: float) -> tuple:
+    """
+    Тренд объёма — подтверждает или опровергает ценовое движение.
+    Падение на растущем объёме = медвежий сигнал.
+    Рост на растущем объёме = бычий сигнал.
+    Движение на падающем объёме = слабое, возможен разворот.
+    """
+    bull, bear = 0.0, 0.0
+    
+    if not ctx:
+        return 0.0, 0.0
+    
+    vol_trend = ctx.get("vol_trend_1d", "neutral")
+    
+    if vol_trend == "increasing":
+        # Растущий объём подтверждает движение
+        if r_24h < -2:
+            bear += 0.8  # Падение на объёме = сильный медвежий сигнал
+        elif r_24h > 2:
+            bull += 0.8  # Рост на объёме = сильный бычий сигнал
+        elif r_24h < 0:
+            bear += 0.4
+        elif r_24h > 0:
+            bull += 0.4
+    elif vol_trend == "decreasing":
+        # Падающий объём = движение слабеет, возможен разворот
+        if r_24h < -2:
+            bull += 0.3  # Падение на убывающем объёме = возможный отскок
+        elif r_24h > 2:
+            bear += 0.3  # Рост на убывающем объёме = возможная коррекция
+    
+    return min(bull, 1.0), min(bear, 1.0)
+
+def score_market_structure(ctx: dict) -> tuple:
+    """
+    Структура рынка на 4H — HH/HL vs LH/LL.
+    Более краткосрочный сигнал чем дневной тренд.
+    """
+    bull, bear = 0.0, 0.0
+    
+    if not ctx:
+        return 0.0, 0.0
+    
+    structure_4h = ctx.get("price_structure_4h", "neutral")
+    structure_1d = ctx.get("price_structure_1d", "neutral")
+    
+    # 4H структура
+    if structure_4h == "uptrend":
+        bull += 0.6
+    elif structure_4h == "downtrend":
+        bear += 0.6
+    
+    # Если 1D и 4H совпадают — усиливаем сигнал
+    if structure_4h == structure_1d == "uptrend":
+        bull += 0.4
+    elif structure_4h == structure_1d == "downtrend":
+        bear += 0.4
+    # Расхождение — ослабляем
+    elif structure_4h != structure_1d and "sideways" not in [structure_4h, structure_1d]:
+        bull *= 0.7
+        bear *= 0.7
+    
+    return min(bull, 1.0), min(bear, 1.0)
+
+# ============================================================
+# ОСНОВНАЯ ФУНКЦИЯ
+# ============================================================
 
 def calc_probability(bull, bear):
     diff = bull - bear
@@ -140,42 +309,47 @@ def calc_corridor(price, atr, horizon_h, regime):
 
 async def forecast_symbol(symbol: str, features: dict) -> list:
     results = []
+    ctx = get_context()  # Получаем глобальный контекст рынка
+    
     for horizon, hours in HORIZONS.items():
         try:
             w = await get_weights(symbol, horizon)
 
-            # Конвертируем все значения из БД в float
-            price     = f(features.get("price")) or 0
-            r_1h      = f(features.get("r_1h")) or 0
-            r_24h     = f(features.get("r_24h")) or 0
-            rsi       = f(features.get("rsi_14"))
-            macd      = f(features.get("macd"))
-            macd_sig  = f(features.get("macd_signal"))
-            macd_hist = f(features.get("macd_histogram"))
-            bb_upper  = f(features.get("bollinger_upper"))
-            bb_lower  = f(features.get("bollinger_lower"))
-            fg        = f(features.get("fear_greed_index"))
-            atr       = f(features.get("atr"))
-            risk      = f(features.get("risk_score")) or 50
-            candle_sc = f(features.get("candlestick_score")) or 0
-            support   = f(features.get("support_1"))
+            price      = f(features.get("price")) or 0
+            r_1h       = f(features.get("r_1h")) or 0
+            r_24h      = f(features.get("r_24h")) or 0
+            rsi        = f(features.get("rsi_14"))
+            macd       = f(features.get("macd"))
+            macd_sig   = f(features.get("macd_signal"))
+            macd_hist  = f(features.get("macd_histogram"))
+            bb_upper   = f(features.get("bollinger_upper"))
+            bb_lower   = f(features.get("bollinger_lower"))
+            fg         = f(features.get("fear_greed_index"))
+            atr        = f(features.get("atr"))
+            risk       = f(features.get("risk_score")) or 50
+            candle_sc  = f(features.get("candlestick_score")) or 0
+            support    = f(features.get("support_1"))
             resistance = f(features.get("resistance_1"))
-            sr_signal = features.get("sr_signal") or "neutral"
-            regime    = features.get("regime") or "neutral"
+            sr_signal  = features.get("sr_signal") or "neutral"
+            regime     = features.get("regime") or "neutral"
 
             scores = {
-                "momentum":    score_momentum(r_1h, r_24h, regime),
-                "rsi":         score_rsi(rsi, regime),
-                "bollinger":   score_bollinger(price, bb_upper, bb_lower),
-                "macd":        score_macd(macd, macd_sig, macd_hist),
-                "candlestick": score_candlestick(candle_sc),
-                "fear_greed":  score_fear_greed(fg),
-                "regime":      score_regime(regime),
-                "sr":          score_sr(price, support, resistance, sr_signal),
+                "momentum":         score_momentum(r_1h, r_24h, regime),
+                "rsi":              score_rsi(rsi, regime),
+                "bollinger":        score_bollinger(price, bb_upper, bb_lower),
+                "macd":             score_macd(macd, macd_sig, macd_hist),
+                "candlestick":      score_candlestick(candle_sc),
+                "fear_greed":       score_fear_greed(fg),
+                "regime":           score_regime(regime),
+                "sr":               score_sr(price, support, resistance, sr_signal),
+                # Новые факторы
+                "btc_trend":        score_btc_trend(ctx),
+                "volume_trend":     score_volume_trend(ctx, r_1h, r_24h),
+                "market_structure": score_market_structure(ctx),
             }
 
-            bull_total = sum(v[0] * BASE_WEIGHTS.get(k, 0.1) * w.get(k, 1.0) for k, v in scores.items())
-            bear_total = sum(v[1] * BASE_WEIGHTS.get(k, 0.1) * w.get(k, 1.0) for k, v in scores.items())
+            bull_total = sum(v[0] * BASE_WEIGHTS.get(k, 0.05) * w.get(k, 1.0) for k, v in scores.items())
+            bear_total = sum(v[1] * BASE_WEIGHTS.get(k, 0.05) * w.get(k, 1.0) for k, v in scores.items())
 
             direction, prob, conf = calc_probability(bull_total, bear_total)
             p10, p50, p90 = calc_corridor(price, atr, hours, regime)

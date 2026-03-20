@@ -108,16 +108,16 @@ async def get_atr_sl(symbol: str, price: float) -> float:
 
 def get_allowed_direction(fg: float) -> str:
     """
-    FG >= 50 → только LONG  (рынок жадный = растёт)
-    FG 30-49 → оба          (нейтральная зона)
-    FG < 30  → только SHORT (рынок в страхе = падает)
+    FG > 65  → только SHORT (эйфория = вершина рынка)
+    FG 35-65 → оба направления (нейтральная зона)
+    FG < 35  → только LONG  (страх = дно = жди отскок)
     """
-    if fg >= 50:
-        return "long_only"
-    elif fg >= 30:
+    if fg >= 65:
+        return "short_only"
+    elif fg >= 35:
         return "both"
     else:
-        return "short_only"
+        return "long_only"
 
 def get_min_probability(fg: float) -> float:
     return 65.0 if 30 <= fg < 50 else 51.0

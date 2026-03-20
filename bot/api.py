@@ -85,23 +85,50 @@ async def get_positions():
 
 @app.get("/api/trades")
 async def get_trades(limit: int = 50):
+    # Получаем все закрытые сделки включая частичные закрытия
     rows = await db.fetch("""
-        SELECT * FROM crypto_demo_trades
-        WHERE status='closed' AND pnl_usdt IS NOT NULL
-        ORDER BY closed_at DESC LIMIT $1
+        SELECT
+            t.id, t.symbol, t.trade_type, t.entry_price, t.exit_price,
+            t.amount_usdt, t.close_reason, t.opened_at, t.closed_at,
+            -- Суммируем PnL включая частичные закрытия (tp1_partial)
+            COALESCE(t.pnl_usdt, 0) +
+            COALESCE((
+                SELECT SUM(h.pnl_usdt)
+                FROM crypto_demo_trades h
+                WHERE h.symbol = t.symbol
+                AND h.opened_at = t.opened_at
+                AND h.close_reason LIKE '%tp1_partial%'
+                AND h.status = 'closed'
+                AND h.id != t.id
+            ), 0) as total_pnl
+        FROM crypto_demo_trades t
+        WHERE t.status='closed'
+        AND t.pnl_usdt IS NOT NULL
+        AND t.close_reason NOT LIKE '%tp1_partial%'
+        ORDER BY t.closed_at DESC LIMIT $1
     """, limit)
-    return [{
-        "id": str(r["id"]),
-        "symbol": r["symbol"],
-        "direction": r["trade_type"],
-        "entry_price": float(r["entry_price"]),
-        "exit_price": float(r["exit_price"]) if r["exit_price"] else None,
-        "pnl": float(r["pnl_usdt"]),
-        "pnl_pct": round(float(r["pnl_usdt"]) / float(r["amount_usdt"]) * 100, 2),
-        "close_reason": r["close_reason"],
-        "opened_at": r["opened_at"].isoformat(),
-        "closed_at": r["closed_at"].isoformat() if r["closed_at"] else None,
-    } for r in rows]
+
+    result = []
+    for r in rows:
+        total_pnl = float(r["total_pnl"] or 0)
+        size = float(r["amount_usdt"])
+        close_reason = r["close_reason"] or ""
+        # Показываем что была частичная фиксация
+        if total_pnl > float(r.get("pnl_usdt") or 0) * 1.1:
+            close_reason = "tp1_partial+" + close_reason
+        result.append({
+            "id": str(r["id"]),
+            "symbol": r["symbol"],
+            "direction": r["trade_type"],
+            "entry_price": float(r["entry_price"]),
+            "exit_price": float(r["exit_price"]) if r["exit_price"] else None,
+            "pnl": round(total_pnl, 2),
+            "pnl_pct": round(total_pnl / size * 100, 2),
+            "close_reason": close_reason,
+            "opened_at": r["opened_at"].isoformat(),
+            "closed_at": r["closed_at"].isoformat() if r["closed_at"] else None,
+        })
+    return result
 
 @app.get("/api/balance_history")
 async def get_balance_history():

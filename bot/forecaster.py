@@ -333,6 +333,11 @@ async def forecast_symbol(symbol: str, features: dict) -> list:
             sr_signal  = features.get("sr_signal") or "neutral"
             regime     = features.get("regime") or "neutral"
 
+            # При extreme fear (FG<20) контрарианский подход — ослабляем медвежьи факторы
+            fg_val = fg or 50
+            btc_trend_mult = 0.3 if fg_val < 20 else (0.6 if fg_val < 35 else 1.0)
+            vol_trend_mult = 0.5 if fg_val < 20 else 1.0
+
             scores = {
                 "momentum":         score_momentum(r_1h, r_24h, regime),
                 "rsi":              score_rsi(rsi, regime),
@@ -342,9 +347,9 @@ async def forecast_symbol(symbol: str, features: dict) -> list:
                 "fear_greed":       score_fear_greed(fg),
                 "regime":           score_regime(regime),
                 "sr":               score_sr(price, support, resistance, sr_signal),
-                # Новые факторы
-                "btc_trend":        score_btc_trend(ctx),
-                "volume_trend":     score_volume_trend(ctx, r_1h, r_24h),
+                # Новые факторы (ослабляем при extreme fear)
+                "btc_trend":        tuple(x * btc_trend_mult for x in score_btc_trend(ctx)),
+                "volume_trend":     tuple(x * vol_trend_mult for x in score_volume_trend(ctx, r_1h, r_24h)),
                 "market_structure": score_market_structure(ctx),
             }
 

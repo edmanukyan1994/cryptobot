@@ -34,7 +34,9 @@ async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool
 
     # 2. Прогноз должен быть уверенным (не borderline)
     prob = float(forecast.get("direction_probability") or 50)
-    fg = float(forecast.get("fear_greed") or 50) if forecast.get("fear_greed") else 50
+    # Читаем FG из БД напрямую
+    fg_row = await db.fetchrow("SELECT value FROM crypto_fear_greed WHERE id='latest'")
+    fg = float(fg_row["value"]) if fg_row else 50.0
     # В режиме extreme fear (FG<35) разрешаем neutral прогноз если S/R сильный
     min_prob = 51 if fg < 35 else 54
     if prob < min_prob:
@@ -134,7 +136,12 @@ def check_entry(features: dict, forecast: dict, params: dict) -> tuple:
     risk = float(forecast.get("risk_score") or 100)
     direction_raw = forecast.get("direction", "neutral")
 
-    if direction_raw == "neutral":
+    # При extreme fear (FG<20) и long_only — разрешаем вход даже при neutral/down прогнозе
+    fg_val = float(features.get("fear_greed_index") or 50)
+    allowed_dir = get_allowed_direction(fg_val)
+    if fg_val < 20 and allowed_dir == "long_only" and direction_raw in ("neutral", "down"):
+        pass  # контрарианский вход — extreme fear = потенциальный отскок
+    elif direction_raw == "neutral":
         return False, "", "neutral_forecast"
 
     fg = float(features.get("fear_greed_index") or 50)

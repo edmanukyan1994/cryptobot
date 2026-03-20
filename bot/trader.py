@@ -146,7 +146,11 @@ def check_entry(features: dict, forecast: dict, params: dict) -> tuple:
     fg = float(features.get("fear_greed_index") or 50)
     allowed = get_allowed_direction(fg)
     min_prob = get_min_probability(fg)
-    direction = "long" if direction_raw == "up" else "short"
+    # При extreme fear override всегда входим LONG независимо от прогноза
+    if extreme_fear_override:
+        direction = "long"
+    else:
+        direction = "long" if direction_raw == "up" else "short"
 
     if allowed == "long_only" and direction == "short":
         return False, "", f"short_blocked(FG={fg:.0f}<35=fear)"

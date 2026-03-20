@@ -139,9 +139,8 @@ def check_entry(features: dict, forecast: dict, params: dict) -> tuple:
     # При extreme fear (FG<20) и long_only — разрешаем вход даже при neutral/down прогнозе
     fg_val = float(features.get("fear_greed_index") or 50)
     allowed_dir = get_allowed_direction(fg_val)
-    if fg_val < 20 and allowed_dir == "long_only" and direction_raw in ("neutral", "down"):
-        pass  # контрарианский вход — extreme fear = потенциальный отскок
-    elif direction_raw == "neutral":
+    extreme_fear_override = fg_val < 20 and allowed_dir == "long_only"
+    if not extreme_fear_override and direction_raw == "neutral":
         return False, "", "neutral_forecast"
 
     fg = float(features.get("fear_greed_index") or 50)

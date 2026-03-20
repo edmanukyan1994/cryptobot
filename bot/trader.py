@@ -100,110 +100,64 @@ async def get_price(symbol: str) -> float | None:
         return None
     return price
 
+async def get_sl_price(symbol: str, price: float, direction: str) -> tuple[float, float]:
+    """
+    Возвращает (sl_price, sl_pct) — цену стопа и процент от входа.
+    
+    Приоритет:
+    1. S/R уровень — стоп 0.5% за уровень
+    2. ATR×2 fallback
+    3. Максимум 15% (защита от краша)
+    """
+    MAX_SL_PCT = 15.0
+    SR_BUFFER = 0.005  # 0.5% за уровень
+    
+    try:
+        f_row = await db.fetchrow(
+            "SELECT support_1, resistance_1, atr FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
+            symbol
+        )
+        
+        if f_row:
+            # Стоп по S/R уровню
+            if direction == "short" and f_row["resistance_1"]:
+                res = float(f_row["resistance_1"])
+                sl_price = res * (1 + SR_BUFFER)
+                sl_pct = (sl_price - price) / price * 100
+                if 0.3 <= sl_pct <= MAX_SL_PCT:
+                    return sl_price, round(sl_pct, 2)
+            
+            elif direction == "long" and f_row["support_1"]:
+                sup = float(f_row["support_1"])
+                sl_price = sup * (1 - SR_BUFFER)
+                sl_pct = (price - sl_price) / price * 100
+                if 0.3 <= sl_pct <= MAX_SL_PCT:
+                    return sl_price, round(sl_pct, 2)
+            
+            # Fallback: ATR×2
+            if f_row["atr"] and price > 0:
+                atr_pct = float(f_row["atr"]) / price * 100
+                sl_pct = max(1.5, min(MAX_SL_PCT, atr_pct * 2))
+                if direction == "short":
+                    return price * (1 + sl_pct/100), round(sl_pct, 2)
+                else:
+                    return price * (1 - sl_pct/100), round(sl_pct, 2)
+    except Exception:
+        pass
+    
+    # Hard fallback
+    sl_pct = 2.0
+    if direction == "short":
+        return price * (1 + sl_pct/100), sl_pct
+    else:
+        return price * (1 - sl_pct/100), sl_pct
+
+
 async def get_atr_sl(symbol: str, price: float) -> float:
-    if price <= 0:
-        return 2.5
-    row = await db.fetchrow(
-        "SELECT atr FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1", symbol
-    )
-    if not row or not row["atr"]:
-        return 2.5
-    atr_pct = float(row["atr"]) / price * 100
-    return round(max(1.5, min(4.0, atr_pct * 2.0)), 2)
+    """Legacy wrapper для обратной совместимости."""
+    _, sl_pct = await get_sl_price(symbol, price, "short")
+    return sl_pct
 
-def get_allowed_direction(fg: float) -> str:
-    """
-    FG > 65  → только SHORT (эйфория = вершина рынка)
-    FG 35-65 → оба направления (нейтральная зона)
-    FG < 35  → только LONG  (страх = дно = жди отскок)
-    """
-    if fg >= 65:
-        return "short_only"
-    elif fg >= 35:
-        return "both"
-    else:
-        return "long_only"
-
-def get_min_probability(fg: float) -> float:
-    return 65.0 if 30 <= fg < 50 else 51.0
-
-def check_entry(features: dict, forecast: dict, params: dict) -> tuple:
-    if not features or not forecast:
-        return False, "", "no_data"
-
-    prob = float(forecast.get("direction_probability") or 50)
-    conf = float(forecast.get("confidence") or 50)
-    risk = float(forecast.get("risk_score") or 100)
-    direction_raw = forecast.get("direction", "neutral")
-
-    # При extreme fear (FG<20) и long_only — разрешаем вход даже при neutral/down прогнозе
-    fg_val = float(features.get("fear_greed_index") or 50)
-    allowed_dir = get_allowed_direction(fg_val)
-    extreme_fear_override = fg_val < 20 and allowed_dir == "long_only"
-    if not extreme_fear_override and direction_raw == "neutral":
-        return False, "", "neutral_forecast"
-
-    fg = float(features.get("fear_greed_index") or 50)
-    allowed = get_allowed_direction(fg)
-    min_prob = get_min_probability(fg)
-    # При extreme fear override всегда входим LONG независимо от прогноза
-    if extreme_fear_override:
-        direction = "long"
-    else:
-        direction = "long" if direction_raw == "up" else "short"
-
-    if allowed == "long_only" and direction == "short":
-        return False, "", f"short_blocked(FG={fg:.0f}<35=fear)"
-    if allowed == "short_only" and direction == "long":
-        return False, "", f"long_blocked(FG={fg:.0f}>65=greed)"
-
-    max_risk = float(params.get("max_risk_score") or 75)
-    if prob < min_prob:
-        return False, "", f"low_prob({prob:.0f}<{min_prob:.0f})"
-    if conf < float(params.get("min_confidence") or 50):
-        return False, "", f"low_conf({conf:.0f})"
-    if risk > max_risk:
-        return False, "", f"high_risk({risk:.0f})"
-
-    sr_sig = features.get("sr_signal") or "neutral"
-    sr_str = float(features.get("sr_strength") or 0)
-    current_price = float(features.get("price") or 0)
-    support_1 = float(features.get("support_1") or 0)
-    resistance_1 = float(features.get("resistance_1") or 0)
-
-    # Блокируем противоположные S/R сигналы
-    if direction == "short" and sr_sig == "bounce_support" and sr_str >= 30:
-        return False, "", "sr_support_blocks_short"
-    if direction == "long" and sr_sig == "bounce_resistance" and sr_str >= 30:
-        return False, "", "sr_resistance_blocks_long"
-
-    # Фильтр дистанции — входим только когда цена вплотную к уровню (< 0.5%)
-    MAX_DIST = 0.5
-    if direction == "short" and resistance_1 > 0 and current_price > 0:
-        dist_to_res = (resistance_1 - current_price) / current_price * 100
-        if dist_to_res > MAX_DIST:
-            return False, "", f"dist_to_res_too_far({dist_to_res:.2f}%>{MAX_DIST}%)"
-    if direction == "long" and support_1 > 0 and current_price > 0:
-        dist_to_sup = (current_price - support_1) / current_price * 100
-        if dist_to_sup > MAX_DIST:
-            return False, "", f"dist_to_sup_too_far({dist_to_sup:.2f}%>{MAX_DIST}%)"
-    # Мягкий S/R фильтр - только блокируем противоположные сигналы
-    # bounce_support при SHORT и bounce_resistance при LONG уже заблокированы выше
-
-    # P10/P90 фильтр только в нейтральной зоне (both)
-    # В trend режимах (long_only/short_only) цена может быть где угодно
-    if allowed == "both":
-        price = float(features.get("price") or 0)
-        p10 = float(forecast.get("p10") or 0)
-        p90 = float(forecast.get("p90") or 0)
-        if p90 > p10 and price > 0:
-            pos = (price - p10) / (p90 - p10)
-            if direction == "long" and pos > 0.35:
-                return False, "", f"long_not_low({pos:.2f})"
-            if direction == "short" and pos < 0.65:
-                return False, "", f"short_not_high({pos:.2f})"
-
-    return True, direction, f"{direction}(p={prob:.0f},c={conf:.0f},fg={fg:.0f})"
 
 async def open_trade(account, symbol, direction, price, params, forecast, sr_data=None):
     if not price or price <= 0:
@@ -217,7 +171,7 @@ async def open_trade(account, symbol, direction, price, params, forecast, sr_dat
         return None
 
     crypto = size / price
-    sl_pct = await get_atr_sl(symbol, price)
+    sl_price, sl_pct = await get_sl_price(symbol, price, direction)
     tp1 = float(params.get("tp1_percent") or 2.0)
 
     row = await db.fetchrow(
@@ -270,7 +224,7 @@ async def check_exit(trade, price, params):
     has_tp1 = "tp1" in prev
     has_tp2 = "tp2" in prev
     fee_pct = float(params.get("fee_rate_taker") or 0.055) * 2 + 0.1
-    sl_pct = await get_atr_sl(trade["symbol"], price)
+    _, sl_pct = await get_sl_price(trade["symbol"], price, direction)
 
     if pnl_pct <= -sl_pct:
         return True, "stop_loss", 100

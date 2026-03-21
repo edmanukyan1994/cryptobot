@@ -2,6 +2,7 @@ import aiohttp
 import asyncio
 import logging
 from datetime import datetime, timezone
+
 from config import TRADING_INTERVAL, DEMO_INITIAL_BALANCE, TELEGRAM_CHAT_ID, BYBIT_SYMBOL_MAP
 import db
 import telegram_bot as tg
@@ -22,27 +23,75 @@ SECTOR = {
     "NEAR": "alt-l1", "APT": "alt-l1", "SUI": "alt-l1", "ATOM": "alt-l1",
 }
 
+
+def get_allowed_direction(fg: float) -> str:
+    """
+    Простой режим направления по Fear & Greed.
+    Возвращает:
+    - long_only
+    - short_only
+    - both
+    """
+    try:
+        fg = float(fg)
+    except (TypeError, ValueError):
+        return "both"
+
+    if fg <= 25:
+        return "long_only"
+    if fg >= 75:
+        return "short_only"
+    return "both"
+
+
+def check_entry(features: dict, forecast: dict, params: dict) -> tuple[bool, str, str]:
+    """
+    Базовая логика входа, чтобы бот не падал.
+    Возвращает:
+    (should_open, direction, reason)
+    """
+    if not forecast:
+        return False, "", "no_data"
+
+    try:
+        prob = float(forecast.get("direction_probability") or 0)
+    except (TypeError, ValueError):
+        prob = 0.0
+
+    fc_direction = str(forecast.get("direction") or "").lower().strip()
+
+    min_prob = float(params.get("min_forecast_probability") or 54)
+
+    if prob < min_prob:
+        return False, "", f"weak_forecast({prob:.0f}%<{min_prob:.0f}%)"
+
+    if fc_direction in ("long", "up", "bull", "bullish", "buy"):
+        return True, "long", "forecast_long"
+
+    if fc_direction in ("short", "down", "bear", "bearish", "sell"):
+        return True, "short", "forecast_short"
+
+    return False, "", "neutral_forecast"
+
+
 async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool, str]:
     """
     Умная проверка переоткрытия — без cooldown по времени.
     Открываем снова только если сигнал реально подтверждает вход.
     """
-    # 1. Прогноз должен быть свежим
     fc_age = (datetime.now(timezone.utc) - forecast["created_at"].replace(tzinfo=timezone.utc)).total_seconds() / 60
     if fc_age > 15:
         return False, f"stale_forecast({fc_age:.0f}min)"
 
-    # 2. Прогноз должен быть уверенным (не borderline)
     prob = float(forecast.get("direction_probability") or 50)
-    # Читаем FG из БД напрямую
+
     fg_row = await db.fetchrow("SELECT value FROM crypto_fear_greed WHERE id='latest'")
     fg = float(fg_row["value"]) if fg_row else 50.0
-    # В режиме extreme fear (FG<35) разрешаем neutral прогноз если S/R сильный
+
     min_prob = 51 if fg < 35 else 54
     if prob < min_prob:
         return False, f"weak_signal({prob:.0f}%<{min_prob}%)"
 
-    # 3. Смотрим последнюю закрытую сделку по этому символу
     last_closed = await db.fetchrow(
         """SELECT exit_price, pnl_usdt, close_reason, closed_at
            FROM crypto_demo_trades
@@ -52,35 +101,38 @@ async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool
     )
 
     if last_closed:
-        # Если последняя сделка закрылась по стоп-лоссу — ждём разворота прогноза
         if last_closed["close_reason"] and "stop_loss" in last_closed["close_reason"]:
-            # Требуем более сильный сигнал после стопа
             if prob < 56:
                 return False, f"post_sl_weak({prob:.0f}%<56%)"
 
-        # Если закрылись меньше 5 минут назад — нужен реально сильный сигнал
         age_min = (datetime.now(timezone.utc) - last_closed["closed_at"].replace(tzinfo=timezone.utc)).total_seconds() / 60
         if age_min < 5 and prob < 57:
             return False, f"too_soon({age_min:.0f}min,{prob:.0f}%<57%)"
 
     return True, "ok"
 
+
 def set_cooldown(symbol: str):
-    pass  # Больше не нужен — логика в can_reenter
+    pass
+
 
 async def load_params() -> dict:
     row = await db.fetchrow("SELECT * FROM crypto_strategy_params WHERE id='current'")
     return dict(row) if row else {}
 
+
 async def get_account() -> dict | None:
     row = await db.fetchrow("SELECT * FROM crypto_demo_accounts WHERE is_active=true LIMIT 1")
     return dict(row) if row else None
 
+
 async def get_open_trades(account_id: str) -> list:
     rows = await db.fetch(
-        "SELECT * FROM crypto_demo_trades WHERE account_id=$1 AND status='open'", account_id
+        "SELECT * FROM crypto_demo_trades WHERE account_id=$1 AND status='open'",
+        account_id
     )
     return [dict(r) for r in rows]
+
 
 async def get_price(symbol: str) -> float | None:
     row = await db.fetchrow(
@@ -89,72 +141,69 @@ async def get_price(symbol: str) -> float | None:
     )
     if not row:
         return None
+
     price = float(row["price"])
     if price <= 0:
         return None
-    # Проверка минимальной цены для крупных монет
+
     min_prices = {"BTC": 1000, "ETH": 100, "BNB": 10, "SOL": 1}
     min_p = min_prices.get(symbol, 0.000001)
     if price < min_p:
         logger.warning(f"Suspicious price {symbol}: ${price} < min ${min_p}")
         return None
+
     return price
+
 
 async def get_sl_price(symbol: str, price: float, direction: str) -> tuple[float, float]:
     """
     Возвращает (sl_price, sl_pct) — цену стопа и процент от входа.
-    
+
     Приоритет:
     1. S/R уровень — стоп 0.5% за уровень
     2. ATR×2 fallback
     3. Максимум 15% (защита от краша)
     """
     MAX_SL_PCT = 15.0
-    SR_BUFFER = 0.005  # 0.5% за уровень
-    
+    SR_BUFFER = 0.005
+
     try:
         f_row = await db.fetchrow(
             "SELECT support_1, resistance_1, atr FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
             symbol
         )
-        
+
         if f_row:
-            # Стоп по S/R уровню
             if direction == "short" and f_row["resistance_1"]:
                 res = float(f_row["resistance_1"])
                 sl_price = res * (1 + SR_BUFFER)
                 sl_pct = (sl_price - price) / price * 100
                 if 0.3 <= sl_pct <= MAX_SL_PCT:
                     return sl_price, round(sl_pct, 2)
-            
+
             elif direction == "long" and f_row["support_1"]:
                 sup = float(f_row["support_1"])
                 sl_price = sup * (1 - SR_BUFFER)
                 sl_pct = (price - sl_price) / price * 100
                 if 0.3 <= sl_pct <= MAX_SL_PCT:
                     return sl_price, round(sl_pct, 2)
-            
-            # Fallback: ATR×2
+
             if f_row["atr"] and price > 0:
                 atr_pct = float(f_row["atr"]) / price * 100
                 sl_pct = max(1.5, min(MAX_SL_PCT, atr_pct * 2))
                 if direction == "short":
-                    return price * (1 + sl_pct/100), round(sl_pct, 2)
-                else:
-                    return price * (1 - sl_pct/100), round(sl_pct, 2)
+                    return price * (1 + sl_pct / 100), round(sl_pct, 2)
+                return price * (1 - sl_pct / 100), round(sl_pct, 2)
     except Exception:
         pass
-    
-    # Hard fallback
+
     sl_pct = 2.0
     if direction == "short":
-        return price * (1 + sl_pct/100), sl_pct
-    else:
-        return price * (1 - sl_pct/100), sl_pct
+        return price * (1 + sl_pct / 100), sl_pct
+    return price * (1 - sl_pct / 100), sl_pct
 
 
 async def get_atr_sl(symbol: str, price: float) -> float:
-    """Legacy wrapper для обратной совместимости."""
     _, sl_pct = await get_sl_price(symbol, price, "short")
     return sl_pct
 
@@ -188,19 +237,26 @@ async def open_trade(account, symbol, direction, price, params, forecast, sr_dat
     if not row:
         return None
 
-    # Используем S/R стоп если есть (точнее ATR стопа)
-    sr_nearest = sr_data.get("nearest_support") if sr_data and direction=="long" else (sr_data.get("nearest_resistance") if sr_data else None)
+    sr_nearest = sr_data.get("nearest_support") if sr_data and direction == "long" else (
+        sr_data.get("nearest_resistance") if sr_data else None
+    )
+
     if sr_nearest:
         sr_level = float(sr_nearest["price"])
         sr_conf = float(sr_nearest.get("confluence_score", 0))
-        logger.info(f"OPEN {direction.upper()} {symbol} @ ${price:,.4f} size=${size:,.0f} sl={sl_pct}% | SR level=${sr_level:,.4f} conf={sr_conf:.2f}")
+        logger.info(
+            f"OPEN {direction.upper()} {symbol} @ ${price:,.4f} size=${size:,.0f} "
+            f"sl={sl_pct}% | SR level=${sr_level:,.4f} conf={sr_conf:.2f}"
+        )
     else:
         logger.info(f"OPEN {direction.upper()} {symbol} @ ${price:,.4f} size=${size:,.0f} sl={sl_pct}%")
+
     await tg.send(
         tg.fmt_open(symbol, direction, price, size, sl_pct, tp1),
         account.get("telegram_chat_id") or TELEGRAM_CHAT_ID
     )
     return dict(row)
+
 
 async def check_exit(trade, price, params):
     if price <= 0:
@@ -212,12 +268,13 @@ async def check_exit(trade, price, params):
     direction = trade["trade_type"]
     peak = float(trade.get("peak_pnl_usdt") or 0)
 
-    pnl = (price-entry)*crypto if direction=="long" else (entry-price)*crypto
+    pnl = (price - entry) * crypto if direction == "long" else (entry - price) * crypto
     pnl_pct = pnl / size * 100
 
     if pnl > peak:
         await db.execute("UPDATE crypto_demo_trades SET peak_pnl_usdt=$1 WHERE id=$2", pnl, trade["id"])
         peak = pnl
+
     peak_pct = peak / size * 100
 
     prev = trade.get("close_reason") or ""
@@ -228,10 +285,10 @@ async def check_exit(trade, price, params):
 
     if pnl_pct <= -sl_pct:
         return True, "stop_loss", 100
+
     if has_tp1 and params.get("be_stop_after_tp1", True) and pnl_pct <= fee_pct:
         return True, "breakeven_stop", 100
 
-    # TP по S/R уровням (приоритет над процентным TP)
     sr_features = await db.fetchrow(
         "SELECT support_1, resistance_1 FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
         trade["symbol"]
@@ -242,6 +299,7 @@ async def check_exit(trade, price, params):
             sr_tp_pct = (sr_tp - entry) / entry * 100
             if not has_tp1 and sr_tp_pct >= 0.5 and price >= sr_tp * 0.998:
                 return True, "tp1_partial", float(params.get("tp1_close_pct") or 40)
+
         elif direction == "short" and sr_features["support_1"]:
             sr_tp = float(sr_features["support_1"])
             sr_tp_pct = (entry - sr_tp) / entry * 100
@@ -279,6 +337,7 @@ async def check_exit(trade, price, params):
 
     return False, "", 0
 
+
 async def close_trade(trade, price, reason, close_pct, account, params):
     entry = float(trade["entry_price"])
     size = float(trade["amount_usdt"])
@@ -291,45 +350,52 @@ async def close_trade(trade, price, reason, close_pct, account, params):
         frac = close_pct / 100
         closed_crypto = crypto * frac
         closed_usdt = size * frac
-        gross = (price-entry)*closed_crypto if direction=="long" else (entry-price)*closed_crypto
-        fees = closed_usdt * (2*fee/100) + closed_usdt * 0.001
+        gross = (price - entry) * closed_crypto if direction == "long" else (entry - price) * closed_crypto
+        fees = closed_usdt * (2 * fee / 100) + closed_usdt * 0.001
         pnl = gross - fees
         new_reason = f"{prev},{reason}" if prev else reason
+
         await db.execute(
             "UPDATE crypto_demo_trades SET amount_usdt=$1,amount_crypto=$2,close_reason=$3 WHERE id=$4",
-            size-closed_usdt, crypto-closed_crypto, new_reason, trade["id"]
+            size - closed_usdt, crypto - closed_crypto, new_reason, trade["id"]
         )
         await db.execute(
             "UPDATE crypto_demo_accounts SET current_balance=current_balance+$1 WHERE id=$2",
             pnl, account["id"]
         )
-        await tg.send(tg.fmt_partial(trade["symbol"],int(close_pct),pnl,size-closed_usdt,reason),
-                      account.get("telegram_chat_id") or TELEGRAM_CHAT_ID)
-        logger.info(f"PARTIAL {trade['symbol']} {close_pct}% pnl=${pnl:,.2f} [{reason}]")
-        return pnl
-    else:
-        gross = (price-entry)*crypto if direction=="long" else (entry-price)*crypto
-        fees = size * (2*fee/100) + size * 0.001
-        pnl = gross - fees
-        pnl_pct = pnl / size * 100
-        hold_h = (datetime.now(timezone.utc) - trade["opened_at"].replace(tzinfo=timezone.utc)).total_seconds() / 3600
-        full_reason = f"{prev},{reason}" if prev else reason
-        await db.execute(
-            "UPDATE crypto_demo_trades SET exit_price=$1,pnl_usdt=$2,status='closed',closed_at=now(),close_reason=$3 WHERE id=$4",
-            price, pnl, full_reason, trade["id"]
-        )
-        await db.execute(
-            "UPDATE crypto_demo_accounts SET current_balance=current_balance+$1 WHERE id=$2",
-            pnl, account["id"]
-        )
-        new_bal = float(account["current_balance"]) + pnl
         await tg.send(
-            tg.fmt_close(trade["symbol"],direction,entry,price,pnl,pnl_pct,reason,hold_h,new_bal),
+            tg.fmt_partial(trade["symbol"], int(close_pct), pnl, size - closed_usdt, reason),
             account.get("telegram_chat_id") or TELEGRAM_CHAT_ID
         )
-        e = "✅" if pnl > 0 else "❌"
-        logger.info(f"{e} CLOSE {trade['symbol']} {direction.upper()} pnl=${pnl:,.2f} ({pnl_pct:.1f}%) [{reason}]")
+        logger.info(f"PARTIAL {trade['symbol']} {close_pct}% pnl=${pnl:,.2f} [{reason}]")
         return pnl
+
+    gross = (price - entry) * crypto if direction == "long" else (entry - price) * crypto
+    fees = size * (2 * fee / 100) + size * 0.001
+    pnl = gross - fees
+    pnl_pct = pnl / size * 100
+    hold_h = (datetime.now(timezone.utc) - trade["opened_at"].replace(tzinfo=timezone.utc)).total_seconds() / 3600
+    full_reason = f"{prev},{reason}" if prev else reason
+
+    await db.execute(
+        "UPDATE crypto_demo_trades SET exit_price=$1,pnl_usdt=$2,status='closed',closed_at=now(),close_reason=$3 WHERE id=$4",
+        price, pnl, full_reason, trade["id"]
+    )
+    await db.execute(
+        "UPDATE crypto_demo_accounts SET current_balance=current_balance+$1 WHERE id=$2",
+        pnl, account["id"]
+    )
+
+    new_bal = float(account["current_balance"]) + pnl
+    await tg.send(
+        tg.fmt_close(trade["symbol"], direction, entry, price, pnl, pnl_pct, reason, hold_h, new_bal),
+        account.get("telegram_chat_id") or TELEGRAM_CHAT_ID
+    )
+
+    e = "✅" if pnl > 0 else "❌"
+    logger.info(f"{e} CLOSE {trade['symbol']} {direction.upper()} pnl=${pnl:,.2f} ({pnl_pct:.1f}%) [{reason}]")
+    return pnl
+
 
 async def fast_exit_check(prices: dict):
     """Быстрая проверка по WebSocket ценам каждые 10 секунд."""
@@ -337,6 +403,7 @@ async def fast_exit_check(prices: dict):
     account = await get_account()
     if not account or params.get("kill_switch_active"):
         return
+
     open_trades = await get_open_trades(account["id"])
     for trade in open_trades:
         price = prices.get(trade["symbol"])
@@ -349,6 +416,7 @@ async def fast_exit_check(prices: dict):
                 set_cooldown(trade["symbol"])
             account = await get_account()
 
+
 async def trading_cycle():
     params = await load_params()
     account = await get_account()
@@ -356,7 +424,6 @@ async def trading_cycle():
         return
 
     banned = set(params.get("banned_symbols") or [])
-    cooldown_min = float(params.get("symbol_cooldown_minutes") or 30)
     fc_max_age = float(params.get("forecast_max_age_minutes") or 15)
 
     open_trades = await get_open_trades(account["id"])
@@ -393,9 +460,10 @@ async def trading_cycle():
     logger.info(f"Cycle: FG={fg:.0f} → {allowed} | open={len(open_trades)}/{MAX_OPEN}")
 
     symbols = await db.fetch("SELECT symbol FROM crypto_assets WHERE is_active=true ORDER BY rank")
-    candidates = [r["symbol"] for r in symbols
-                  if r["symbol"] not in open_syms
-                  and r["symbol"] not in banned]
+    candidates = [
+        r["symbol"] for r in symbols
+        if r["symbol"] not in open_syms and r["symbol"] not in banned
+    ]
 
     new_trades = 0
     for symbol in candidates:
@@ -403,10 +471,12 @@ async def trading_cycle():
             break
 
         f_row = await db.fetchrow(
-            "SELECT * FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1", symbol
+            "SELECT * FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
+            symbol
         )
         if not f_row:
             continue
+
         features = dict(f_row)
 
         age = (datetime.now(timezone.utc) - features["ts"].replace(tzinfo=timezone.utc)).total_seconds() / 60
@@ -416,6 +486,7 @@ async def trading_cycle():
         forecast = await get_latest_forecast(symbol, "4h")
         if not forecast:
             continue
+
         fc_age = (datetime.now(timezone.utc) - forecast["created_at"].replace(tzinfo=timezone.utc)).total_seconds() / 60
         if fc_age > fc_max_age:
             continue
@@ -426,13 +497,18 @@ async def trading_cycle():
                 logger.info(f"SKIP {symbol}: {reason}")
             continue
 
-        # Умная проверка переоткрытия (без cooldown по времени)
+        if allowed == "long_only" and direction != "long":
+            logger.info(f"BLOCKED {symbol}: FG long_only")
+            continue
+        if allowed == "short_only" and direction != "short":
+            logger.info(f"BLOCKED {symbol}: FG short_only")
+            continue
+
         can_open, reentry_reason = await can_reenter(symbol, direction, forecast)
         if not can_open:
             logger.info(f"BLOCKED {symbol}: {reentry_reason}")
             continue
 
-        # Нет противоположных позиций в одном секторе
         sector = SECTOR.get(symbol, "other")
         sector_trades = [t for t in open_trades if SECTOR.get(t["symbol"], "other") == sector]
         if any(t["trade_type"] != direction for t in sector_trades):
@@ -450,7 +526,6 @@ async def trading_cycle():
         if not price:
             continue
 
-        # S/R анализ — проверяем качество входа
         sr_data = None
         try:
             async with aiohttp.ClientSession() as sr_session:
@@ -460,7 +535,6 @@ async def trading_cycle():
         except Exception as e:
             logger.debug(f"SR analysis error {symbol}: {e}")
 
-        # Проверяем S/R сигнал
         sr_ok, sl_price, sr_reason = get_sr_entry_signal(sr_data, direction)
         if sr_data and not sr_ok:
             logger.info(f"SR blocked {symbol} {direction}: {sr_reason}")
@@ -473,22 +547,27 @@ async def trading_cycle():
             open_syms.add(symbol)
             account = await get_account()
 
+
 async def run_trader():
     logger.info("Trader started")
+
     account = await get_account()
     if not account:
         count = await db.fetchval("SELECT COUNT(*) FROM crypto_demo_accounts")
         if count == 0:
             await db.execute(
                 "INSERT INTO crypto_demo_accounts (initial_balance,current_balance,telegram_chat_id,is_active) VALUES ($1,$1,$2,true)",
-                DEMO_INITIAL_BALANCE, TELEGRAM_CHAT_ID or ""
+                DEMO_INITIAL_BALANCE,
+                TELEGRAM_CHAT_ID or ""
             )
             logger.info(f"Demo account created: ${DEMO_INITIAL_BALANCE:,.0f}")
         else:
             await db.execute(
-                "UPDATE crypto_demo_accounts SET is_active=true WHERE id=(SELECT id FROM crypto_demo_accounts ORDER BY created_at LIMIT 1)"
+                "UPDATE crypto_demo_accounts SET is_active=true "
+                "WHERE id=(SELECT id FROM crypto_demo_accounts ORDER BY created_at LIMIT 1)"
             )
             logger.info("Reactivated existing account")
+
         account = await get_account()
 
     if account:
@@ -497,23 +576,27 @@ async def run_trader():
         pnl = bal - init
         pnl_pct = pnl / init * 100
         sign = "+" if pnl >= 0 else ""
+
         fg_row = await db.fetchrow("SELECT value, label FROM crypto_fear_greed WHERE id='latest'")
         fg_val = float(fg_row["value"]) if fg_row else 0
         fg_label = fg_row["label"] if fg_row else "Unknown"
-        direction_mode = "both"
-        dir_emoji = "🟡"
+
+        direction_mode = get_allowed_direction(fg_val)
+        dir_emoji = "🟢" if direction_mode == "long_only" else "🔴" if direction_mode == "short_only" else "🟡"
+
         open_cnt = await db.fetchval("SELECT COUNT(*) FROM crypto_demo_trades WHERE status='open'")
+
         await tg.send(
             f"🤖 <b>Криптобот v1.1 перезапущен</b>\n\n"
             f"💰 Баланс: ${bal:,.0f}\n"
             f"📈 PnL: {sign}${pnl:,.0f} ({sign}{pnl_pct:.2f}%)\n"
             f"📊 Открытых позиций: {open_cnt}\n"
             f"😰 Fear & Greed: {fg_val:.0f} ({fg_label})\n"
-            f"{dir_emoji} Режим: BOTH",
+            f"{dir_emoji} Режим: {direction_mode}",
             account.get("telegram_chat_id") or TELEGRAM_CHAT_ID
         )
 
-await asyncio.sleep(120)
+    await asyncio.sleep(120)
 
     while True:
         try:

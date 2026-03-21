@@ -157,47 +157,10 @@ async def get_price(symbol: str) -> float | None:
 
 async def get_sl_price(symbol: str, price: float, direction: str) -> tuple[float, float]:
     """
-    Возвращает (sl_price, sl_pct) — цену стопа и процент от входа.
-
-    Приоритет:
-    1. S/R уровень — стоп 0.5% за уровень
-    2. ATR×2 fallback
-    3. Максимум 15% (защита от краша)
+    Фиксированный стоп 15% от цены входа.
     """
-    MAX_SL_PCT = 15.0
-    SR_BUFFER = 0.005
+    sl_pct = 15.0
 
-    try:
-        f_row = await db.fetchrow(
-            "SELECT support_1, resistance_1, atr FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
-            symbol
-        )
-
-        if f_row:
-            if direction == "short" and f_row["resistance_1"]:
-                res = float(f_row["resistance_1"])
-                sl_price = res * (1 + SR_BUFFER)
-                sl_pct = (sl_price - price) / price * 100
-                if 0.3 <= sl_pct <= MAX_SL_PCT:
-                    return sl_price, round(sl_pct, 2)
-
-            elif direction == "long" and f_row["support_1"]:
-                sup = float(f_row["support_1"])
-                sl_price = sup * (1 - SR_BUFFER)
-                sl_pct = (price - sl_price) / price * 100
-                if 0.3 <= sl_pct <= MAX_SL_PCT:
-                    return sl_price, round(sl_pct, 2)
-
-            if f_row["atr"] and price > 0:
-                atr_pct = float(f_row["atr"]) / price * 100
-                sl_pct = max(1.5, min(MAX_SL_PCT, atr_pct * 2))
-                if direction == "short":
-                    return price * (1 + sl_pct / 100), round(sl_pct, 2)
-                return price * (1 - sl_pct / 100), round(sl_pct, 2)
-    except Exception:
-        pass
-
-    sl_pct = 2.0
     if direction == "short":
         return price * (1 + sl_pct / 100), sl_pct
     return price * (1 - sl_pct / 100), sl_pct

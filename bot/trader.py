@@ -60,7 +60,7 @@ def check_entry(features: dict, forecast: dict, params: dict) -> tuple[bool, str
 
     fc_direction = str(forecast.get("direction") or "").lower().strip()
 
-    min_prob = float(params.get("min_forecast_probability") or 54)
+    min_prob = float(params.get("min_forecast_probability") or 51)
 
     if prob < min_prob:
         return False, "", f"weak_forecast({prob:.0f}%<{min_prob:.0f}%)"
@@ -88,7 +88,7 @@ async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool
     fg_row = await db.fetchrow("SELECT value FROM crypto_fear_greed WHERE id='latest'")
     fg = float(fg_row["value"]) if fg_row else 50.0
 
-    min_prob = 51 if fg < 35 else 54
+    min_prob = 51 if fg < 35 else 51
     if prob < min_prob:
         return False, f"weak_signal({prob:.0f}%<{min_prob}%)"
 

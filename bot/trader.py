@@ -386,15 +386,20 @@ async def fast_exit_check(prices: dict):
 
 
 async def trading_cycle():
+    logger.info("Cycle start")
     params = await load_params()
+    logger.info("Cycle params loaded")
     account = await get_account()
+    logger.info("Cycle account loaded")
     if not account:
+        logger.info("Cycle stopped: no account")
         return
 
     banned = set(params.get("banned_symbols") or [])
     fc_max_age = float(params.get("forecast_max_age_minutes") or 15)
 
     open_trades = await get_open_trades(account["id"])
+    logger.info(f"Cycle open trades loaded: {len(open_trades)}")
     for trade in open_trades:
         price = await get_price(trade["symbol"])
         if not price:
@@ -407,12 +412,15 @@ async def trading_cycle():
             account = await get_account()
 
     if params.get("kill_switch_active"):
+        logger.info("Cycle stopped: kill switch active")
         return
 
     open_trades = await get_open_trades(account["id"])
+    logger.info(f"Cycle open trades reloaded: {len(open_trades)}")
     open_syms = {t["symbol"] for t in open_trades}
 
     if len(open_trades) >= MAX_OPEN:
+        logger.info(f"Cycle stopped: max open reached ({len(open_trades)}/{MAX_OPEN})")
         return
 
     balance = float(account["current_balance"])
@@ -422,16 +430,20 @@ async def trading_cycle():
         logger.warning(f"Daily drawdown {dd_pct:.1f}% — no new entries")
         return
 
+    logger.info("Cycle before fear&greed fetch")
     fg_row = await db.fetchrow("SELECT value FROM crypto_fear_greed WHERE id='latest'")
     fg = float(fg_row["value"]) if fg_row else 50.0
     allowed = get_allowed_direction(fg)
+    logger.info(f"Cycle fear&greed loaded: {fg:.0f} -> {allowed}")
     logger.info(f"Cycle: FG={fg:.0f} → {allowed} | open={len(open_trades)}/{MAX_OPEN}")
 
     symbols = await db.fetch("SELECT symbol FROM crypto_assets WHERE is_active=true ORDER BY rank")
+    logger.info(f"Cycle symbols loaded: {len(symbols)}")
     candidates = [
         r["symbol"] for r in symbols
         if r["symbol"] not in open_syms and r["symbol"] not in banned
     ]
+    logger.info(f"Cycle candidates prepared: {len(candidates)}")
 
     new_trades = 0
     for symbol in candidates:
@@ -488,6 +500,7 @@ async def trading_cycle():
         size = balance * float(params.get("position_size_percent") or 5) / 100
         max_exp = balance * float(params.get("max_total_exposure") or 25) / 100
         if exposure + size > max_exp:
+            logger.info("Cycle stopped: max exposure reached")
             break
 
         price = await get_price(symbol)
@@ -515,6 +528,7 @@ async def trading_cycle():
             open_syms.add(symbol)
             account = await get_account()
 
+    logger.info(f"Cycle finished: opened {new_trades} new trades")
 
 async def run_trader():
     logger.info("Trader started")

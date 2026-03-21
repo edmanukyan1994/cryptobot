@@ -492,26 +492,26 @@ async def run_trader():
         account = await get_account()
 
     if account:
-    bal = float(account["current_balance"])
-    init = float(account["initial_balance"])
-    pnl = bal - init
-    pnl_pct = pnl / init * 100
-    sign = "+" if pnl >= 0 else ""
-    fg_row = await db.fetchrow("SELECT value, label FROM crypto_fear_greed WHERE id='latest'")
-    fg_val = float(fg_row["value"]) if fg_row else 0
-    fg_label = fg_row["label"] if fg_row else "Unknown"
-    direction_mode = "both"
-    dir_emoji = "🟡"
-    open_cnt = await db.fetchval("SELECT COUNT(*) FROM crypto_demo_trades WHERE status='open'")
-    await tg.send(
-        f"🤖 <b>Криптобот v1.1 перезапущен</b>\n\n"
-        f"💰 Баланс: ${bal:,.0f}\n"
-        f"📈 PnL: {sign}${pnl:,.0f} ({sign}{pnl_pct:.2f}%)\n"
-        f"📊 Открытых позиций: {open_cnt}\n"
-        f"😰 Fear & Greed: {fg_val:.0f} ({fg_label})\n"
-        f"{dir_emoji} Режим: BOTH",
-        account.get("telegram_chat_id") or TELEGRAM_CHAT_ID
-    )
+        bal = float(account["current_balance"])
+        init = float(account["initial_balance"])
+        pnl = bal - init
+        pnl_pct = pnl / init * 100
+        sign = "+" if pnl >= 0 else ""
+        fg_row = await db.fetchrow("SELECT value, label FROM crypto_fear_greed WHERE id='latest'")
+        fg_val = float(fg_row["value"]) if fg_row else 0
+        fg_label = fg_row["label"] if fg_row else "Unknown"
+        direction_mode = "both"
+        dir_emoji = "🟡"
+        open_cnt = await db.fetchval("SELECT COUNT(*) FROM crypto_demo_trades WHERE status='open'")
+        await tg.send(
+            f"🤖 <b>Криптобот v1.1 перезапущен</b>\n\n"
+            f"💰 Баланс: ${bal:,.0f}\n"
+            f"📈 PnL: {sign}${pnl:,.0f} ({sign}{pnl_pct:.2f}%)\n"
+            f"📊 Открытых позиций: {open_cnt}\n"
+            f"😰 Fear & Greed: {fg_val:.0f} ({fg_label})\n"
+            f"{dir_emoji} Режим: BOTH",
+            account.get("telegram_chat_id") or TELEGRAM_CHAT_ID
+        )
 
 await asyncio.sleep(120)
 

@@ -189,12 +189,14 @@ async def open_trade(account, symbol, direction, price, params, forecast, sr_dat
     row = await db.fetchrow(
         """INSERT INTO crypto_demo_trades
            (account_id,symbol,trade_type,amount_usdt,amount_crypto,entry_price,
+            sl_price,
             status,leverage,peak_pnl_usdt,trough_pnl_usdt,
             forecast_direction,forecast_probability,mirrored_to_bybit)
-           VALUES ($1,$2,$3,$4,$5,$6,'open',1.0,0.0,0.0,$7,$8,false)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'open',1.0,0.0,0.0,$8,$9,false)
            RETURNING *""",
         account["id"], symbol, direction,
         round(size, 2), crypto, price,
+        sl_price,
         forecast.get("direction"), forecast.get("direction_probability")
     )
     if not row:
@@ -244,10 +246,13 @@ async def check_exit(trade, price, params):
     has_tp1 = "tp1" in prev
     has_tp2 = "tp2" in prev
     fee_pct = float(params.get("fee_rate_taker") or 0.055) * 2 + 0.1
-    _, sl_pct = await get_sl_price(trade["symbol"], price, direction)
+    sl_price = float(trade.get("sl_price") or 0)
 
-    if pnl_pct <= -sl_pct:
-        return True, "stop_loss", 100
+    if sl_price > 0:
+        if direction == "long" and price <= sl_price:
+            return True, "stop_loss", 100
+        if direction == "short" and price >= sl_price:
+            return True, "stop_loss", 100
 
     if has_tp1 and params.get("be_stop_after_tp1", True) and pnl_pct <= fee_pct:
         return True, "breakeven_stop", 100

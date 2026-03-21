@@ -11,7 +11,7 @@ from sr_engine import analyze_sr, get_sr_entry_signal, update_features_sr
 
 logger = logging.getLogger("trader")
 
-MAX_OPEN = 8
+MAX_OPEN = 100
 MAX_NEW_PER_CYCLE = 2
 
 SECTOR = {

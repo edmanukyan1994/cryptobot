@@ -565,7 +565,8 @@ async def run_trader():
         )
         logger.info("Trader init message sent")
 
-    await asyncio.sleep(120)
+    logger.info("Trader warmup started")
+    await asyncio.sleep(10)
     logger.info("Trader entering main loop")
 
     while True:

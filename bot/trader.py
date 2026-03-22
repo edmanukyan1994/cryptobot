@@ -72,7 +72,7 @@ async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool
     fg_row = await db.fetchrow("SELECT value FROM crypto_fear_greed WHERE id='latest'")
     fg = float(fg_row["value"]) if fg_row else 50.0
 
-    min_prob = 51 if fg < 35 else 51
+    min_prob = 70
     if prob < min_prob:
         return False, f"weak_signal({prob:.0f}%<{min_prob}%)"
 

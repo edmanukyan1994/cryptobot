@@ -25,22 +25,6 @@ SECTOR = {
 
 
 def get_allowed_direction(fg: float) -> str:
-    """
-    Простой режим направления по Fear & Greed.
-    Возвращает:
-    - long_only
-    - short_only
-    - both
-    """
-    try:
-        fg = float(fg)
-    except (TypeError, ValueError):
-        return "both"
-
-    if fg <= 25:
-        return "long_only"
-    if fg >= 75:
-        return "short_only"
     return "both"
 
 

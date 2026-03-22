@@ -282,16 +282,33 @@ def score_market_structure(ctx: dict) -> tuple:
 def calc_probability(bull, bear):
     diff = bull - bear
     total = bull + bear
-    if total < 0.1: return "neutral", 50.0, 40.0
-    if abs(diff) < 0.15:
-        direction, prob = "neutral", 50.0
-    elif diff > 0:
-        direction = "up"
-        prob = min(80, 50 + diff * 15)
-    else:
-        direction = "down"
-        prob = min(80, 50 + abs(diff) * 15)
-    conf = min(85, (max(bull, bear) / total * 100)) if total > 0 else 40.0
+
+    if total < 0.1:
+        return "neutral", 50.0, 40.0
+
+    # Нейтральная зона: перевес слишком маленький
+    if abs(diff) < 0.08:
+        return "neutral", 50.0, 50.0
+
+    # Направление
+    direction = "up" if diff > 0 else "down"
+
+    # Насколько одна сторона доминирует над другой
+    dominance = max(bull, bear) / total  # от 0.5 до 1.0
+
+    # Переводим dominance в шкалу 50–100
+    # 0.50 -> 50
+    # 0.60 -> 60
+    # 0.70 -> 70
+    # 0.80 -> 80
+    # 0.90 -> 90
+    # 1.00 -> 100
+    prob = 50 + (dominance - 0.5) * 100
+    prob = max(50.0, min(100.0, prob))
+
+    # Отдельная confidence — почти то же, но оставим как вспомогательную
+    conf = max(50.0, min(100.0, dominance * 100))
+
     return direction, round(prob, 1), round(conf, 1)
 
 def calc_corridor(price, atr, horizon_h, regime):
@@ -332,11 +349,11 @@ async def forecast_symbol(symbol: str, features: dict) -> list:
             resistance = f(features.get("resistance_1"))
             sr_signal  = features.get("sr_signal") or "neutral"
             regime     = features.get("regime") or "neutral"
-
-            # При extreme fear (FG<20) контрарианский подход — ослабляем медвежьи факторы
+            
+            # Не ослабляем медвежьи факторы слишком агрессивно
             fg_val = fg or 50
-            btc_trend_mult = 0.3 if fg_val < 20 else (0.6 if fg_val < 35 else 1.0)
-            vol_trend_mult = 0.5 if fg_val < 20 else 1.0
+            btc_trend_mult = 0.8 if fg_val < 20 else (0.9 if fg_val < 35 else 1.0)
+            vol_trend_mult = 0.9 if fg_val < 20 else 1.0
 
             scores = {
                 "momentum":         score_momentum(r_1h, r_24h, regime),

@@ -44,7 +44,7 @@ def check_entry(features: dict, forecast: dict, params: dict) -> tuple[bool, str
 
     fc_direction = str(forecast.get("direction") or "").lower().strip()
 
-    min_prob = float(params.get("min_forecast_probability") or 51)
+    min_prob = float(params.get("min_forecast_probability") or 70)
 
     if prob < min_prob:
         return False, "", f"weak_forecast({prob:.0f}%<{min_prob:.0f}%)"

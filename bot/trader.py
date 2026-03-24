@@ -246,41 +246,54 @@ async def check_exit(trade, price, params):
         trade["symbol"]
     )
     if sr_features:
+        # LONG: закрываемся полностью, когда почти дошли до сопротивления
         if direction == "long" and sr_features["resistance_1"]:
             sr_tp = float(sr_features["resistance_1"])
             sr_tp_pct = (sr_tp - entry) / entry * 100
-            if not has_tp1 and sr_tp_pct >= 0.5 and price >= sr_tp * 0.998:
-                return True, "tp1_partial", float(params.get("tp1_close_pct") or 40)
 
+            # Имеет смысл только если сопротивление действительно выше входа
+            if sr_tp_pct >= 0.5:
+                # если до сопротивления осталось <= 0.35%, закрываемся полностью
+                if price >= sr_tp * 0.9965:
+                    return True, "tp_sr_resistance", 100
+
+        # SHORT: закрываемся полностью, когда почти дошли до поддержки
         elif direction == "short" and sr_features["support_1"]:
             sr_tp = float(sr_features["support_1"])
             sr_tp_pct = (entry - sr_tp) / entry * 100
-            if not has_tp1 and sr_tp_pct >= 0.5 and price <= sr_tp * 1.002:
-                return True, "tp1_partial", float(params.get("tp1_close_pct") or 40)
 
-    tp1 = float(params.get("tp1_percent") or 2.0)
-    if not has_tp1 and pnl_pct >= tp1:
-        return True, "tp1_partial", float(params.get("tp1_close_pct") or 40)
+            # Имеет смысл только если поддержка действительно ниже входа
+            if sr_tp_pct >= 0.5:
+                # если до поддержки осталось <= 0.35%, закрываемся полностью
+                if price <= sr_tp * 1.0035:
+                    return True, "tp_sr_support", 100
+    # Старые partial TP отключены.
+    # Теперь основной выход:
+    # 1) у цели по S/R
+    # 2) по trailing после нормального движения
+    # 3) по stop-loss
 
-    tp2 = float(params.get("tp2_percent") or 4.0)
-    if has_tp1 and not has_tp2 and pnl_pct >= tp2:
-        return True, "tp2_partial", float(params.get("tp2_close_pct") or 30)
-
-    trail_start = float(params.get("trail_start_percent") or 1.0)
+    trail_start = float(params.get("trail_start_percent") or 2.5)
     if peak_pct >= trail_start:
         atr_row = await db.fetchrow(
             "SELECT atr, price FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
             trade["symbol"]
         )
-        offset = 0.8
+
+        # Даём сделке дышать заметно больше, чем раньше
+        offset = 1.8
+
         if atr_row and atr_row["atr"] and atr_row["price"]:
             atr_pct = float(atr_row["atr"]) / float(atr_row["price"]) * 100
-            offset = max(0.5, min(3.0, atr_pct * float(params.get("runner_trail_atr_mult") or 1.2)))
+            offset = max(1.2, min(4.5, atr_pct * float(params.get("runner_trail_atr_mult") or 1.8)))
+
         if pnl_pct <= peak_pct - offset:
             return True, "trailing_stop", 100
 
-    if not has_tp1 and peak_pct >= 3.0:
-        floor = max(fee_pct, peak_pct * 0.5)
+    # Мягкая защита прибыли только после заметного движения.
+    # Раньше срабатывало слишком рано и душило хорошие сделки.
+    if peak_pct >= 5.0:
+        floor = max(1.0, peak_pct * 0.35)
         if pnl_pct <= floor:
             return True, "trailing_breakeven", 100
 

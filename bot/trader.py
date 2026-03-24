@@ -283,6 +283,21 @@ async def check_exit(trade, price, params):
         if direction == "short" and price >= sl_price:
             return True, "stop_loss", 100
 
+    # Авто-выход при сильном противоположном прогнозе
+    latest_fc = await get_latest_forecast(trade["symbol"], "4h")
+    if latest_fc:
+        fc_dir = str(latest_fc.get("direction") or "").lower().strip()
+        fc_prob = float(latest_fc.get("direction_probability") or 0)
+
+        if direction == "long" and fc_dir == "down" and fc_prob >= 75:
+            return True, f"opposite_forecast_exit({fc_prob:.1f})", 100
+
+        if direction == "short" and fc_dir == "up" and fc_prob >= 75:
+            return True, f"opposite_forecast_exit({fc_prob:.1f})", 100
+
+    if has_tp1 and params.get("be_stop_after_tp1", True) and pnl_pct <= fee_pct:
+        return True, "breakeven_stop", 100
+
     if has_tp1 and params.get("be_stop_after_tp1", True) and pnl_pct <= fee_pct:
         return True, "breakeven_stop", 100
 

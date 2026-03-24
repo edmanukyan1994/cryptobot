@@ -30,32 +30,77 @@ def get_allowed_direction(fg: float) -> str:
 
 def check_entry(features: dict, forecast: dict, params: dict) -> tuple[bool, str, str]:
     """
-    Базовая логика входа, чтобы бот не падал.
-    Возвращает:
-    (should_open, direction, reason)
+    Усиленная логика входа v2
     """
+
     if not forecast:
         return False, "", "no_data"
 
     try:
         prob = float(forecast.get("direction_probability") or 0)
-    except (TypeError, ValueError):
+    except:
         prob = 0.0
 
     fc_direction = str(forecast.get("direction") or "").lower().strip()
 
-    min_prob = float(params.get("min_forecast_probability") or 70)
+    # нормализуем направление
+    if fc_direction in ("long", "up", "bull", "bullish", "buy"):
+        direction = "long"
+    elif fc_direction in ("short", "down", "bear", "bearish", "sell"):
+        direction = "short"
+    else:
+        return False, "", "neutral_forecast"
+
+    # =========================
+    # 1. PROBABILITY
+    # =========================
+    min_prob = float(params.get("min_forecast_probability") or 75)
 
     if prob < min_prob:
-        return False, "", f"weak_forecast({prob:.0f}%<{min_prob:.0f}%)"
+        return False, "", f"weak_prob({prob:.1f}<{min_prob})"
 
-    if fc_direction in ("long", "up", "bull", "bullish", "buy"):
-        return True, "long", "forecast_long"
+    # =========================
+    # 2. REGIME FILTER
+    # =========================
+    regime = str(features.get("regime") or "")
 
-    if fc_direction in ("short", "down", "bear", "bearish", "sell"):
-        return True, "short", "forecast_short"
+    if regime == "crash" and direction == "long":
+        return False, "", "blocked_long_in_crash"
 
-    return False, "", "neutral_forecast"
+    # =========================
+    # 3. MOMENTUM
+    # =========================
+    r_1h = float(features.get("r_1h") or 0)
+
+    if direction == "long" and r_1h < 0:
+        return False, "", f"bad_momentum_long({r_1h:.2f})"
+
+    if direction == "short" and r_1h > 0:
+        return False, "", f"bad_momentum_short({r_1h:.2f})"
+
+    # =========================
+    # 4. RSI FILTER
+    # =========================
+    rsi = float(features.get("rsi_14") or 50)
+
+    if direction == "long" and rsi > 65:
+        return False, "", f"rsi_high({rsi:.1f})"
+
+    if direction == "short" and rsi < 35:
+        return False, "", f"rsi_low({rsi:.1f})"
+
+    # =========================
+    # 5. VOLUME FILTER
+    # =========================
+    volume = float(features.get("volume_24h") or 0)
+
+    if volume < 1_000_000:
+        return False, "", f"low_volume({volume:.0f})"
+
+    # =========================
+    # OK → ВХОД
+    # =========================
+    return True, direction, f"entry_ok(prob={prob:.1f})"
 
 
 async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool, str]:
@@ -72,7 +117,7 @@ async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool
     fg_row = await db.fetchrow("SELECT value FROM crypto_fear_greed WHERE id='latest'")
     fg = float(fg_row["value"]) if fg_row else 50.0
 
-    min_prob = 70
+    min_prob = 75
     if prob < min_prob:
         return False, f"weak_signal({prob:.0f}%<{min_prob}%)"
 

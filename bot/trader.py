@@ -295,13 +295,13 @@ async def check_exit(trade, price, params):
 
         if direction == "short" and fc_dir == "up" and fc_prob >= 75:
             return True, f"opposite_forecast_exit({fc_prob:.1f})", 100
-
-        # 2) Ранний выход: сделка уже заметно в минусе, а прогноз слабый
-        if pnl_pct <= -2.0 and fc_prob < 70:
+            
+        # 2) Ранний выход: сделка уже в минусе, а прогноз заметно ослаб
+        if pnl_pct <= -1.5 and fc_prob < 70:
             return True, f"weak_forecast_exit({fc_prob:.1f})", 100
 
-        # 3) Совсем слабый сигнал — выходим даже при небольшом минусе
-        if pnl_pct <= -1.0 and fc_prob < 60:
+        # 3) Совсем слабый сигнал / neutral — выходим почти сразу
+        if pnl_pct <= -0.5 and fc_prob <= 50:
             return True, f"forecast_decay_exit({fc_prob:.1f})", 100
 
     if has_tp1 and params.get("be_stop_after_tp1", True) and pnl_pct <= fee_pct:

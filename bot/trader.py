@@ -377,11 +377,20 @@ async def close_trade(trade, price, reason, close_pct, account, params):
     fee = float(params.get("fee_rate_taker") or 0.055)
     prev = trade.get("close_reason") or ""
 
+        # Реалистичное проскальзывание на выходе
+    slippage_pct = float(params.get("slippage_percent") or 0.15) / 100.0
+
+    exec_price = price
+    if direction == "long":
+        exec_price = price * (1 - slippage_pct)
+    else:
+        exec_price = price * (1 + slippage_pct)
+
     if close_pct < 100:
         frac = close_pct / 100
         closed_crypto = crypto * frac
         closed_usdt = size * frac
-        gross = (price - entry) * closed_crypto if direction == "long" else (entry - price) * closed_crypto
+        gross = (exec_price - entry) * closed_crypto if direction == "long" else (entry - exec_price) * closed_crypto
         fees = closed_usdt * (2 * fee / 100) + closed_usdt * 0.001
         pnl = gross - fees
         new_reason = f"{prev},{reason}" if prev else reason
@@ -401,7 +410,7 @@ async def close_trade(trade, price, reason, close_pct, account, params):
         logger.info(f"PARTIAL {trade['symbol']} {close_pct}% pnl=${pnl:,.2f} [{reason}]")
         return pnl
 
-    gross = (price - entry) * crypto if direction == "long" else (entry - price) * crypto
+    gross = (exec_price - entry) * crypto if direction == "long" else (entry - exec_price) * crypto
     fees = size * (2 * fee / 100) + size * 0.001
     pnl = gross - fees
     pnl_pct = pnl / size * 100
@@ -410,7 +419,7 @@ async def close_trade(trade, price, reason, close_pct, account, params):
 
     await db.execute(
         "UPDATE crypto_demo_trades SET exit_price=$1,pnl_usdt=$2,status='closed',closed_at=now(),close_reason=$3 WHERE id=$4",
-        price, pnl, full_reason, trade["id"]
+        exec_price, pnl, full_reason, trade["id"]
     )
     await db.execute(
         "UPDATE crypto_demo_accounts SET current_balance=current_balance+$1 WHERE id=$2",
@@ -419,12 +428,12 @@ async def close_trade(trade, price, reason, close_pct, account, params):
 
     new_bal = float(account["current_balance"]) + pnl
     await tg.send(
-        tg.fmt_close(trade["symbol"], direction, entry, price, pnl, pnl_pct, reason, hold_h, new_bal),
+        tg.fmt_close(trade["symbol"], direction, entry, exec_price, pnl, pnl_pct, reason, hold_h, new_bal),
         account.get("telegram_chat_id") or TELEGRAM_CHAT_ID
     )
 
     e = "✅" if pnl > 0 else "❌"
-    logger.info(f"{e} CLOSE {trade['symbol']} {direction.upper()} pnl=${pnl:,.2f} ({pnl_pct:.1f}%) [{reason}]")
+    logger.info(f"{e} CLOSE {trade['symbol']} {direction.upper()} @ ${exec_price:,.6f} pnl=${pnl:,.2f} ({pnl_pct:.1f}%) [{reason}]")
     return pnl
 
 

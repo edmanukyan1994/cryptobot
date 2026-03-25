@@ -14,10 +14,10 @@ DEMO_INITIAL_BALANCE = float(os.getenv("DEMO_INITIAL_BALANCE", "10000"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # Интервалы (секунды)
-PRICE_INTERVAL = 120      # цены каждые 2 минуты
-FEATURE_INTERVAL = 600    # фичи каждые 10 минут
-FORECAST_INTERVAL = 600   # прогнозы каждые 10 минут
-TRADING_INTERVAL = 120    # торговый цикл каждые 2 минуты
+PRICE_INTERVAL = 60      # цены каждую минуту
+FEATURE_INTERVAL = 300    # фичи каждые 5 минут
+FORECAST_INTERVAL = 60   # прогнозы каждую минуту
+TRADING_INTERVAL = 60    # торговый цикл каждую минуту
 
 # Маппинг символов для Bybit
 BYBIT_SYMBOL_MAP = {

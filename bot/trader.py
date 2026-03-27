@@ -1,6 +1,7 @@
 import aiohttp
 import asyncio
 import logging
+import json
 from datetime import datetime, timezone
 
 from config import TRADING_INTERVAL, DEMO_INITIAL_BALANCE, TELEGRAM_CHAT_ID, BYBIT_SYMBOL_MAP
@@ -223,15 +224,16 @@ async def open_trade(account, symbol, direction, price, params, forecast, sr_dat
            (account_id,symbol,trade_type,amount_usdt,amount_crypto,entry_price,
             sl_price,
             status,leverage,peak_pnl_usdt,trough_pnl_usdt,
-            forecast_id,forecast_direction,forecast_probability,mirrored_to_bybit)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,'open',1.0,0.0,0.0,$8,$9,$10,false)
+            forecast_id,forecast_direction,forecast_probability,features_snapshot,mirrored_to_bybit)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'open',1.0,0.0,0.0,$8,$9,$10,$11,false)
            RETURNING *""",
         account["id"], symbol, direction,
         round(size, 2), crypto, price,
         sl_price,
         forecast.get("id"),
         forecast.get("direction"),
-        forecast.get("direction_probability")
+        forecast.get("direction_probability"),
+        json.dumps(forecast.get("features_snapshot") or {})
     )
     if not row:
         return None

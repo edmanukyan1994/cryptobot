@@ -82,12 +82,15 @@ def check_entry(features: dict, forecast: dict, params: dict) -> tuple[bool, str
     # 4. RSI FILTER
     # =========================
     rsi = float(features.get("rsi_14") or 50)
+    # более строгий RSI-фильтр
 
-    if direction == "long" and rsi > 65:
-        return False, "", f"rsi_high({rsi:.1f})"
+    # не лонгуем перекупленное
+    if direction == "long" and rsi > 70:
+    return False, "", f"overbought_block(rsi={rsi:.1f})"
 
-    if direction == "short" and rsi < 35:
-        return False, "", f"rsi_low({rsi:.1f})"
+    # не шортим перепроданное
+    if direction == "short" and rsi < 40:
+    return False, "", f"oversold_block(rsi={rsi:.1f})"
 
     # =========================
     # 5. VOLUME FILTER

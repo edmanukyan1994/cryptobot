@@ -217,19 +217,21 @@ async def open_trade(account, symbol, direction, price, params, forecast, sr_dat
     crypto = size / price
     sl_price, sl_pct = await get_sl_price(symbol, price, direction)
     tp1 = float(params.get("tp1_percent") or 2.0)
-
+    
     row = await db.fetchrow(
         """INSERT INTO crypto_demo_trades
            (account_id,symbol,trade_type,amount_usdt,amount_crypto,entry_price,
             sl_price,
             status,leverage,peak_pnl_usdt,trough_pnl_usdt,
-            forecast_direction,forecast_probability,mirrored_to_bybit)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,'open',1.0,0.0,0.0,$8,$9,false)
+            forecast_id,forecast_direction,forecast_probability,mirrored_to_bybit)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'open',1.0,0.0,0.0,$8,$9,$10,false)
            RETURNING *""",
         account["id"], symbol, direction,
         round(size, 2), crypto, price,
         sl_price,
-        forecast.get("direction"), forecast.get("direction_probability")
+        forecast.get("id"),
+        forecast.get("direction"),
+        forecast.get("direction_probability")
     )
     if not row:
         return None

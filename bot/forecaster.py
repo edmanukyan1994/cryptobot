@@ -11,6 +11,7 @@ Forecaster v2 — расширенная модель прогнозирован
 import asyncio
 import math
 import logging
+import json
 from datetime import datetime, timezone
 from config import FORECAST_INTERVAL
 import db
@@ -377,10 +378,37 @@ async def forecast_symbol(symbol: str, features: dict) -> list:
             p10, p50, p90 = calc_corridor(price, atr, hours, regime)
 
             results.append({
-                "symbol": symbol, "horizon": horizon,
-                "direction": direction, "direction_probability": prob, "confidence": conf,
-                "risk_score": risk, "p10": p10, "p50": p50, "p90": p90,
-                "regime": regime, "created_at": datetime.now(timezone.utc),
+                "symbol": symbol,
+                "horizon": horizon,
+                "direction": direction,
+                "direction_probability": prob,
+                "confidence": conf,
+                "risk_score": risk,
+                "p10": p10,
+                "p50": p50,
+                "p90": p90,
+                "regime": regime,
+                "created_at": datetime.now(timezone.utc),
+                "features_snapshot": {
+                    "price": price,
+                    "r_1h": r_1h,
+                    "r_24h": r_24h,
+                    "rsi_14": rsi,
+                    "macd": macd,
+                    "macd_signal": macd_sig,
+                    "macd_histogram": macd_hist,
+                    "bollinger_upper": bb_upper,
+                    "bollinger_lower": bb_lower,
+                    "fear_greed_index": fg,
+                    "atr": atr,
+                    "risk_score": risk,
+                    "support_1": support,
+                    "resistance_1": resistance,
+                    "sr_signal": sr_signal,
+                    "regime": regime,
+                    "volume_24h": f(features.get("volume_24h")),
+                    "btc_context": ctx,
+                },
             })
         except Exception as e:
             logger.warning(f"Forecast error {symbol}/{horizon}: {e}")
@@ -412,12 +440,20 @@ async def run_forecaster():
                         await db.execute(
                             """INSERT INTO crypto_forecast_runs
                                (symbol,horizon,direction,direction_probability,confidence,
-                                risk_score,p10,p50,p90,regime,created_at)
-                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)""",
-                            fc["symbol"], fc["horizon"], fc["direction"],
-                            fc["direction_probability"], fc["confidence"],
-                            fc["risk_score"], fc["p10"], fc["p50"], fc["p90"],
-                            fc["regime"], fc["created_at"]
+                                risk_score,p10,p50,p90,regime,features_snapshot,created_at)
+                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""",
+                            fc["symbol"],
+                            fc["horizon"],
+                            fc["direction"],
+                            fc["direction_probability"],
+                            fc["confidence"],
+                            fc["risk_score"],
+                            fc["p10"],
+                            fc["p50"],
+                            fc["p90"],
+                            fc["regime"],
+                            json.dumps(fc["features_snapshot"]),
+                            fc["created_at"]
                         )
                     count += 1
                 except Exception as e:

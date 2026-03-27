@@ -384,7 +384,7 @@ async def close_trade(trade, price, reason, close_pct, account, params):
     fee = float(params.get("fee_rate_taker") or 0.055)
     prev = trade.get("close_reason") or ""
 
-        # Реалистичное проскальзывание на выходе
+    # Реалистичное проскальзывание на выходе
     slippage_pct = float(params.get("slippage_percent") or 0.15) / 100.0
 
     exec_price = price
@@ -397,27 +397,52 @@ async def close_trade(trade, price, reason, close_pct, account, params):
         frac = close_pct / 100
         closed_crypto = crypto * frac
         closed_usdt = size * frac
-        gross = (exec_price - entry) * closed_crypto if direction == "long" else (entry - exec_price) * closed_crypto
+
+        gross = (
+            (exec_price - entry) * closed_crypto
+            if direction == "long"
+            else (entry - exec_price) * closed_crypto
+        )
         fees = closed_usdt * (2 * fee / 100) + closed_usdt * 0.001
         pnl = gross - fees
         new_reason = f"{prev},{reason}" if prev else reason
 
         await db.execute(
-            "UPDATE crypto_demo_trades SET amount_usdt=$1,amount_crypto=$2,close_reason=$3 WHERE id=$4",
-            size - closed_usdt, crypto - closed_crypto, new_reason, trade["id"]
+            "UPDATE crypto_demo_trades SET amount_usdt=$1, amount_crypto=$2, close_reason=$3 WHERE id=$4",
+            size - closed_usdt,
+            crypto - closed_crypto,
+            new_reason,
+            trade["id"]
         )
+
         await db.execute(
             "UPDATE crypto_demo_accounts SET current_balance=current_balance+$1 WHERE id=$2",
-            pnl, account["id"]
+            pnl,
+            account["id"]
         )
+
         await tg.send(
-            tg.fmt_partial(trade["symbol"], int(close_pct), pnl, size - closed_usdt, reason),
+            tg.fmt_partial(
+                trade["symbol"],
+                int(close_pct),
+                pnl,
+                size - closed_usdt,
+                reason
+            ),
             account.get("telegram_chat_id") or TELEGRAM_CHAT_ID
         )
-        logger.info(f"PARTIAL {trade['symbol']} {close_pct}% pnl=${pnl:,.2f} [{reason}]")
+
+        logger.info(
+            f"PARTIAL {trade['symbol']} {close_pct}% @ ${exec_price:,.6f} "
+            f"pnl=${pnl:,.2f} [{reason}]"
+        )
         return pnl
 
-    gross = (exec_price - entry) * crypto if direction == "long" else (entry - exec_price) * crypto
+    gross = (
+        (exec_price - entry) * crypto
+        if direction == "long"
+        else (entry - exec_price) * crypto
+    )
     fees = size * (2 * fee / 100) + size * 0.001
     pnl = gross - fees
     pnl_pct = pnl / size * 100
@@ -425,12 +450,17 @@ async def close_trade(trade, price, reason, close_pct, account, params):
     full_reason = f"{prev},{reason}" if prev else reason
 
     await db.execute(
-        "UPDATE crypto_demo_trades SET exit_price=$1,pnl_usdt=$2,status='closed',closed_at=now(),close_reason=$3 WHERE id=$4",
-        exec_price, pnl, full_reason, trade["id"]
+        "UPDATE crypto_demo_trades SET exit_price=$1, pnl_usdt=$2, status='closed', closed_at=now(), close_reason=$3 WHERE id=$4",
+        exec_price,
+        pnl,
+        full_reason,
+        trade["id"]
     )
+
     await db.execute(
         "UPDATE crypto_demo_accounts SET current_balance=current_balance+$1 WHERE id=$2",
-        pnl, account["id"]
+        pnl,
+        account["id"]
     )
 
     fresh_account = await db.fetchrow(
@@ -455,7 +485,10 @@ async def close_trade(trade, price, reason, close_pct, account, params):
     )
 
     e = "✅" if pnl > 0 else "❌"
-    logger.info(f"{e} CLOSE {trade['symbol']} {direction.upper()} @ ${exec_price:,.6f} pnl=${pnl:,.2f} ({pnl_pct:.1f}%) [{reason}]")
+    logger.info(
+        f"{e} CLOSE {trade['symbol']} {direction.upper()} @ ${exec_price:,.6f} "
+        f"pnl=${pnl:,.2f} ({pnl_pct:.2f}%) [{reason}]"
+    )
     return pnl
 
 

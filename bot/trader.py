@@ -433,9 +433,24 @@ async def close_trade(trade, price, reason, close_pct, account, params):
         pnl, account["id"]
     )
 
-    new_bal = float(account["current_balance"]) + pnl
+    fresh_account = await db.fetchrow(
+        "SELECT current_balance FROM crypto_demo_accounts WHERE id=$1",
+        account["id"]
+    )
+    new_bal = float(fresh_account["current_balance"]) if fresh_account else float(account["current_balance"]) + pnl
+
     await tg.send(
-        tg.fmt_close(trade["symbol"], direction, entry, exec_price, pnl, pnl_pct, reason, hold_h, new_bal),
+        tg.fmt_close(
+            trade["symbol"],
+            direction,
+            entry,
+            exec_price,
+            pnl,
+            pnl_pct,
+            reason,
+            hold_h,
+            new_bal
+        ),
         account.get("telegram_chat_id") or TELEGRAM_CHAT_ID
     )
 

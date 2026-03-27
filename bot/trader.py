@@ -86,11 +86,11 @@ def check_entry(features: dict, forecast: dict, params: dict) -> tuple[bool, str
 
     # не лонгуем перекупленное
     if direction == "long" and rsi > 70:
-    return False, "", f"overbought_block(rsi={rsi:.1f})"
+        return False, "", f"overbought_block(rsi={rsi:.1f})"
 
     # не шортим перепроданное
     if direction == "short" and rsi < 40:
-    return False, "", f"oversold_block(rsi={rsi:.1f})"
+        return False, "", f"oversold_block(rsi={rsi:.1f})"
 
     # =========================
     # 5. VOLUME FILTER

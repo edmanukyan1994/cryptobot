@@ -28,6 +28,53 @@ SECTOR = {
 def get_allowed_direction(fg: float) -> str:
     return "both"
 
+def detect_setup_type(features: dict, forecast: dict) -> str:
+    """
+    Пока только маркировка.
+    Ничего не меняет в торговом поведении.
+    """
+
+    direction_raw = str(forecast.get("direction") or "").lower().strip()
+    if direction_raw in ("long", "up", "bull", "bullish", "buy"):
+        direction = "long"
+    elif direction_raw in ("short", "down", "bear", "bearish", "sell"):
+        direction = "short"
+    else:
+        return "normal"
+
+    prob = float(forecast.get("direction_probability") or 0)
+    regime = str(features.get("regime") or "")
+    r_1h = float(features.get("r_1h") or 0)
+    r_24h = float(features.get("r_24h") or 0)
+    rsi = float(features.get("rsi_14") or 50)
+    sr_signal = str(features.get("sr_signal") or "")
+    volume = float(features.get("volume_24h") or 0)
+
+    btc_ctx = features.get("btc_context") or {}
+    btc_24h = float(btc_ctx.get("btc_24h_change") or 0)
+    btc_regime = str(btc_ctx.get("global_regime") or "")
+    btc_structure_4h = str(btc_ctx.get("price_structure_4h") or "")
+    btc_vol_trend = str(btc_ctx.get("vol_trend_1d") or "")
+
+    # Первая гипотеза импульсного short-сетапа
+    if direction == "short":
+        if (
+            prob >= 75
+            and regime == "crash"
+            and btc_regime == "bear_market"
+            and btc_structure_4h == "downtrend"
+            and btc_24h <= -1.0
+            and btc_vol_trend in ("increasing", "neutral")
+            and r_24h <= -1.0
+            and r_1h <= 0
+            and 40 <= rsi <= 60
+            and sr_signal in ("bounce_resistance", "neutral")
+            and volume >= 1_000_000
+        ):
+            return "impulse"
+
+    return "normal"
+
 
 def check_entry(features: dict, forecast: dict, params: dict) -> tuple[bool, str, str]:
     """
@@ -220,7 +267,7 @@ async def get_atr_sl(symbol: str, price: float) -> float:
     return sl_pct
 
 
-async def open_trade(account, symbol, direction, price, params, forecast, sr_data=None):
+async def open_trade(account, symbol, direction, price, params, forecast, sr_data=None, setup_type="normal"):
     if not price or price <= 0:
         logger.warning(f"Invalid price {symbol}: {price}")
         return None
@@ -240,8 +287,8 @@ async def open_trade(account, symbol, direction, price, params, forecast, sr_dat
            (account_id,symbol,trade_type,amount_usdt,amount_crypto,entry_price,
             sl_price,
             status,leverage,peak_pnl_usdt,trough_pnl_usdt,
-            forecast_id,forecast_direction,forecast_probability,features_snapshot,mirrored_to_bybit)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,'open',1.0,0.0,0.0,$8,$9,$10,$11,false)
+            forecast_id,forecast_direction,forecast_probability,features_snapshot,setup_type,mirrored_to_bybit)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'open',1.0,0.0,0.0,$8,$9,$10,$11,$12,false)
            RETURNING *""",
         account["id"], symbol, direction,
         round(size, 2), crypto, price,
@@ -249,7 +296,8 @@ async def open_trade(account, symbol, direction, price, params, forecast, sr_dat
         forecast.get("id"),
         forecast.get("direction"),
         forecast.get("direction_probability"),
-        json.dumps(forecast.get("features_snapshot") or {})
+        json.dumps(forecast.get("features_snapshot") or {}),
+        setup_type
     )
     if not row:
         return None
@@ -263,10 +311,13 @@ async def open_trade(account, symbol, direction, price, params, forecast, sr_dat
         sr_conf = float(sr_nearest.get("confluence_score", 0))
         logger.info(
             f"OPEN {direction.upper()} {symbol} @ ${price:,.4f} size=${size:,.0f} "
-            f"sl={sl_pct}% | SR level=${sr_level:,.4f} conf={sr_conf:.2f}"
+            f"sl={sl_pct}% | SR level=${sr_level:,.4f} conf={sr_conf:.2f} | setup={setup_type}"
         )
     else:
-        logger.info(f"OPEN {direction.upper()} {symbol} @ ${price:,.4f} size=${size:,.0f} sl={sl_pct}%")
+        logger.info(
+            f"OPEN {direction.upper()} {symbol} @ ${price:,.4f} size=${size:,.0f} "
+            f"sl={sl_pct}% | setup={setup_type}"
+        )
 
     await tg.send(
         tg.fmt_open(symbol, direction, price, size, sl_pct, tp1),
@@ -610,6 +661,16 @@ async def trading_cycle():
         if not forecast:
             continue
 
+        forecast_snapshot = forecast.get("features_snapshot") or {}
+        if isinstance(forecast_snapshot, str):
+            try:
+                forecast_snapshot = json.loads(forecast_snapshot)
+            except Exception:
+                forecast_snapshot = {}
+
+        if forecast_snapshot.get("btc_context"):
+            features["btc_context"] = forecast_snapshot.get("btc_context")
+
         fc_age = (datetime.now(timezone.utc) - forecast["created_at"].replace(tzinfo=timezone.utc)).total_seconds() / 60
         if fc_age > fc_max_age:
             continue
@@ -664,7 +725,10 @@ async def trading_cycle():
             logger.info(f"SR blocked {symbol} {direction}: {sr_reason}")
             continue
 
-        trade = await open_trade(account, symbol, direction, price, params, forecast, sr_data)
+        setup_type = detect_setup_type(features, forecast)
+        logger.info(f"SETUP {symbol}: {setup_type}")
+
+        trade = await open_trade(account, symbol, direction, price, params, forecast, sr_data, setup_type)
         if trade:
             new_trades += 1
             open_trades.append(trade)

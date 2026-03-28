@@ -27,7 +27,6 @@ SECTOR = {
 
 def get_allowed_direction(fg: float) -> str:
     return "both"
-
 def detect_setup_type(features: dict, forecast: dict) -> str:
     """
     Пока только маркировка.
@@ -54,24 +53,20 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
     btc_24h = float(btc_ctx.get("btc_24h_change") or 0)
     btc_regime = str(btc_ctx.get("global_regime") or "")
     btc_structure_4h = str(btc_ctx.get("price_structure_4h") or "")
-    btc_vol_trend = str(btc_ctx.get("vol_trend_1d") or "")
 
-    # Первая гипотеза импульсного short-сетапа
     if direction == "short":
         if (
             prob >= 75
             and regime == "crash"
             and btc_regime == "bear_market"
-            and btc_structure_4h == "downtrend"
-            and btc_24h <= -1.0
-            and btc_vol_trend in ("increasing", "neutral")
-            and r_24h <= -1.0
-            and r_1h <= 0
+            and btc_structure_4h in ("downtrend", "sideways")
+            and btc_24h <= 1.0
+            and r_1h <= 0.05
             and 40 <= rsi <= 60
             and sr_signal in ("bounce_resistance", "neutral")
             and volume >= 1_000_000
         ):
-            return "impulse"
+            return "impulse_short"
 
     return "normal"
 

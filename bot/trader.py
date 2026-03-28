@@ -725,8 +725,16 @@ async def trading_cycle():
         fc_age = (datetime.now(timezone.utc) - forecast["created_at"].replace(tzinfo=timezone.utc)).total_seconds() / 60
         if fc_age > fc_max_age:
             continue
-
         should, direction, reason = check_entry(features, forecast, params)
+        setup_type = detect_setup_type(features, forecast)
+
+        # Ослабляем no_coin_momentum только для impulse_short
+        if not should and reason.startswith("no_coin_momentum") and setup_type == "impulse_short":
+            logger.info(f"OVERRIDE {symbol}: {reason} -> allowed for {setup_type}")
+            should = True
+            direction = "short"
+            reason = f"entry_ok_override({setup_type})"
+
         if not should:
             if reason not in ("neutral_forecast", "no_data"):
                 logger.info(f"SKIP {symbol}: {reason}")
@@ -776,7 +784,6 @@ async def trading_cycle():
             logger.info(f"SR blocked {symbol} {direction}: {sr_reason}")
             continue
 
-        setup_type = detect_setup_type(features, forecast)
         logger.info(f"SETUP {symbol}: {setup_type}")
 
         trade = await open_trade(account, symbol, direction, price, params, forecast, sr_data, setup_type)

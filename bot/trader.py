@@ -170,6 +170,57 @@ def check_entry(features: dict, forecast: dict, params: dict) -> tuple[bool, str
     return True, direction, f"entry_ok(prob={prob:.1f})"
 
 
+def detect_setup_type(features: dict, forecast: dict) -> str:
+    """
+    Классификация сетапа:
+    - impulse_short / impulse_long
+    - normal
+    """
+
+    try:
+        prob = float(forecast.get("direction_probability") or 0)
+    except:
+        prob = 0.0
+
+    direction = str(forecast.get("direction") or "").lower()
+    regime = str(features.get("regime") or "")
+    r_1h = float(features.get("r_1h") or 0)
+    r_24h = float(features.get("r_24h") or 0)
+
+    btc_ctx = features.get("btc_context") or {}
+    btc_change = float(btc_ctx.get("btc_24h_change") or 0)
+    btc_trend = btc_ctx.get("price_structure_1d")
+
+    sr_signal = features.get("sr_signal")
+
+    # =========================
+    # ИМПУЛЬСНЫЙ ШОРТ
+    # =========================
+    if (
+        direction == "down"
+        and prob >= 75
+        and regime == "crash"
+        and r_1h < -0.03
+        and btc_change < -1
+        and btc_trend in ("downtrend", "bear_market")
+    ):
+        return "impulse_short"
+
+    # =========================
+    # ИМПУЛЬСНЫЙ ЛОНГ (на будущее)
+    # =========================
+    if (
+        direction == "up"
+        and prob >= 75
+        and regime in ("oversold_crash", "reversal")
+        and r_1h > 0.03
+        and btc_change > 1
+    ):
+        return "impulse_long"
+
+    return "normal"
+
+
 async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool, str]:
     """
     Умная проверка переоткрытия — без cooldown по времени.

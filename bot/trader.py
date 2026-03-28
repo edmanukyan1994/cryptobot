@@ -102,6 +102,22 @@ def check_entry(features: dict, forecast: dict, params: dict) -> tuple[bool, str
         return False, "", f"low_volume({volume:.0f})"
 
     # =========================
+    # 6. IMPULSE CONFIRMATION (ключевой фикс)
+    # =========================
+
+    btc_ctx = features.get("btc_context") or {}
+    btc_24h = float(btc_ctx.get("btc_24h_change") or 0)
+    r_24h = float(features.get("r_24h") or 0)
+
+    # для short импульса рынок должен реально падать
+    if direction == "short":
+        if btc_24h > -1.5:
+            return False, "", f"no_btc_momentum({btc_24h:.2f})"
+
+        if r_24h > -1.0:
+            return False, "", f"no_coin_momentum({r_24h:.2f})"
+
+    # =========================
     # OK → ВХОД
     # =========================
     return True, direction, f"entry_ok(prob={prob:.1f})"

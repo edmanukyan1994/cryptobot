@@ -691,8 +691,6 @@ async def trading_cycle():
             except Exception:
                 forecast_snapshot = {}
 
-        if forecast_snapshot.get("btc_context"):
-            features["btc_context"] = forecast_snapshot.get("btc_context")
 
         fc_age = (datetime.now(timezone.utc) - forecast["created_at"].replace(tzinfo=timezone.utc)).total_seconds() / 60
         if fc_age > fc_max_age:

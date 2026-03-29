@@ -144,10 +144,6 @@ async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool
 
     prob = float(forecast.get("direction_probability") or 50)
 
-    fg_row = await db.fetchrow("SELECT value FROM crypto_fear_greed WHERE id='latest'")
-    fg = float(fg_row["value"]) if fg_row else 50.0
-
-
     last_closed = await db.fetchrow(
         """SELECT exit_price, pnl_usdt, close_reason, closed_at
            FROM crypto_demo_trades
@@ -304,7 +300,6 @@ async def check_exit(trade, price, params):
 
     prev = trade.get("close_reason") or ""
     has_tp1 = "tp1" in prev
-    has_tp2 = "tp2" in prev
     fee_pct = float(params.get("fee_rate_taker") or 0.055) * 2 + 0.1
     sl_price = float(trade.get("sl_price") or 0)
 
@@ -342,16 +337,14 @@ async def check_exit(trade, price, params):
         if direction == "long" and sr_features["resistance_1"]:
             sr_tp = float(sr_features["resistance_1"])
             sr_tp_pct = (sr_tp - entry) / entry * 100
-            if sr_tp_pct >= 0.5:
-                if price >= sr_tp * 0.9965:
-                    return True, "tp_sr_resistance", 100
+            if sr_tp_pct >= 0.5 and price >= sr_tp * 0.9965:
+                return True, "tp_sr_resistance", 100
 
         elif direction == "short" and sr_features["support_1"]:
             sr_tp = float(sr_features["support_1"])
             sr_tp_pct = (entry - sr_tp) / entry * 100
-            if sr_tp_pct >= 0.5:
-                if price <= sr_tp * 1.0035:
-                    return True, "tp_sr_support", 100
+            if sr_tp_pct >= 0.5 and price <= sr_tp * 1.0035:
+                return True, "tp_sr_support", 100
 
     trail_start = float(params.get("trail_start_percent") or 2.5)
     if peak_pct >= trail_start:
@@ -361,7 +354,6 @@ async def check_exit(trade, price, params):
         )
 
         offset = 1.8
-
         if atr_row and atr_row["atr"] and atr_row["price"]:
             atr_pct = float(atr_row["atr"]) / float(atr_row["price"]) * 100
             offset = max(1.2, min(4.5, atr_pct * float(params.get("runner_trail_atr_mult") or 1.8)))
@@ -514,6 +506,64 @@ async def fast_exit_check(prices: dict):
             account = await get_account()
 
 
+async def trading_cycle():
+    logger.info("Cycle start")
+    params = await load_params()
+    logger.info("Cycle params loaded")
+    account = await get_account()
+    logger.info("Cycle account loaded")
+    if not account:
+        logger.info("Cycle stopped: no account")
+        return
+
+    banned = set(params.get("banned_symbols") or [])
+    fc_max_age = float(params.get("forecast_max_age_minutes") or 15)
+
+    open_trades = await get_open_trades(account["id"])
+    logger.info(f"Cycle open trades loaded: {len(open_trades)}")
+    for trade in open_trades:
+        price = await get_price(trade["symbol"])
+        if not price:
+            continue
+        should, reason, pct = await check_exit(trade, price, params)
+        if should:
+            pnl = await close_trade(trade, price, reason, pct, account, params)
+            if pnl is not None and pnl < 0:
+                set_cooldown(trade["symbol"])
+            account = await get_account()
+
+    if params.get("kill_switch_active"):
+        logger.info("Cycle stopped: kill switch active")
+        return
+
+    open_trades = await get_open_trades(account["id"])
+    logger.info(f"Cycle open trades reloaded: {len(open_trades)}")
+    open_syms = {t["symbol"] for t in open_trades}
+
+    if len(open_trades) >= MAX_OPEN:
+        logger.info(f"Cycle stopped: max open reached ({len(open_trades)}/{MAX_OPEN})")
+        return
+
+    balance = float(account["current_balance"])
+    initial = float(account["initial_balance"])
+    dd_pct = (initial - balance) / initial * 100 if initial > 0 else 0
+    if dd_pct >= float(params.get("daily_drawdown_limit") or 5):
+        logger.warning(f"Daily drawdown {dd_pct:.1f}% — no new entries")
+        return
+
+    logger.info("Cycle before fear&greed fetch")
+    fg_row = await db.fetchrow("SELECT value FROM crypto_fear_greed WHERE id='latest'")
+    fg = float(fg_row["value"]) if fg_row else 50.0
+    allowed = get_allowed_direction(fg)
+    logger.info(f"Cycle fear&greed loaded: {fg:.0f} -> {allowed}")
+    logger.info(f"Cycle: FG={fg:.0f} → {allowed} | open={len(open_trades)}/{MAX_OPEN}")
+
+    symbols = await db.fetch("SELECT symbol FROM crypto_assets WHERE is_active=true ORDER BY rank")
+    logger.info(f"Cycle symbols loaded: {len(symbols)}")
+    candidates = [
+        r["symbol"] for r in symbols
+        if r["symbol"] not in open_syms and r["symbol"] not in banned
+    ]
     logger.info(f"Cycle candidates prepared: {len(candidates)}")
 
     new_trades = 0
@@ -606,91 +656,6 @@ async def fast_exit_check(prices: dict):
 
     logger.info(f"Cycle finished: opened {new_trades} new trades")
 
-async with aiohttp.ClientSession() as sr_session:
-    for symbol in candidates:
-        if new_trades >= MAX_NEW_PER_CYCLE:
-            break
-
-        f_row = await db.fetchrow(
-            "SELECT * FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
-            symbol
-        )
-        if not f_row:
-            continue
-
-        features = dict(f_row)
-
-        age = (datetime.now(timezone.utc) - features["ts"].replace(tzinfo=timezone.utc)).total_seconds() / 60
-        if age > 30:
-            continue
-
-        forecast = await get_latest_forecast(symbol, "4h")
-        if not forecast:
-            continue
-
-        fc_age = (datetime.now(timezone.utc) - forecast["created_at"].replace(tzinfo=timezone.utc)).total_seconds() / 60
-        if fc_age > fc_max_age:
-            continue
-
-        setup_type = detect_setup_type(features, forecast)
-        should, direction, reason = check_entry(features, forecast, params, setup_type)
-
-        if not should:
-            if reason not in ("neutral_forecast", "no_data"):
-                logger.info(f"SKIP {symbol}: {reason}")
-            continue
-
-        if allowed == "long_only" and direction != "long":
-            logger.info(f"BLOCKED {symbol}: FG long_only")
-            continue
-        if allowed == "short_only" and direction != "short":
-            logger.info(f"BLOCKED {symbol}: FG short_only")
-            continue
-
-        can_open, reentry_reason = await can_reenter(symbol, direction, forecast)
-        if not can_open:
-            logger.info(f"BLOCKED {symbol}: {reentry_reason}")
-            continue
-
-        sector = SECTOR.get(symbol, "other")
-        sector_trades = [t for t in open_trades if SECTOR.get(t["symbol"], "other") == sector]
-        if any(t["trade_type"] != direction for t in sector_trades):
-            continue
-        if len(sector_trades) >= int(params.get("max_positions_high_corr") or 3):
-            continue
-
-        exposure = sum(float(t["amount_usdt"]) for t in open_trades)
-        size = balance * float(params.get("position_size_percent") or 5) / 100
-        max_exp = balance * float(params.get("max_total_exposure") or 25) / 100
-        if exposure + size > max_exp:
-            logger.info("Cycle stopped: max exposure reached")
-            break
-
-        price = await get_price(symbol)
-        if not price:
-            continue
-
-        sr_data = None
-        try:
-            sr_data = await analyze_sr(sr_session, symbol)
-            if sr_data:
-                await update_features_sr(symbol, sr_data)
-        except Exception as e:
-            logger.debug(f"SR analysis error {symbol}: {e}")
-
-        sr_ok, sl_price, sr_reason = get_sr_entry_signal(sr_data, direction)
-        if sr_data and not sr_ok:
-            logger.info(f"SR blocked {symbol} {direction}: {sr_reason}")
-            continue
-
-        logger.info(f"SETUP {symbol}: {setup_type}")
-
-        trade = await open_trade(account, symbol, direction, price, params, forecast, sr_data, setup_type)
-        if trade:
-            new_trades += 1
-            open_trades.append(trade)
-            open_syms.add(symbol)
-            account = await get_account()
 
 async def run_trader():
     logger.info("Trader started")

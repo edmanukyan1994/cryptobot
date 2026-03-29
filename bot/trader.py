@@ -349,7 +349,7 @@ async def check_exit(trade, price, params):
         "SELECT support_1, resistance_1 FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
         trade["symbol"]
     )
-        dist_to_sr_pct = None
+    dist_to_sr_pct = None
     if sr_features:
         if direction == "long" and sr_features["support_1"]:
             support_1 = float(sr_features["support_1"])

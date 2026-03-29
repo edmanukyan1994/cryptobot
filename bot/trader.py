@@ -29,44 +29,57 @@ def get_allowed_direction(fg: float) -> str:
     return "both"
 def detect_setup_type(features: dict, forecast: dict) -> str:
     """
-    Пока только маркировка.
-    Ничего не меняет в торговом поведении.
+    Только маркировка для анализа.
+    На торговое поведение не влияет.
     """
 
-    direction_raw = str(forecast.get("direction") or "").lower().strip()
-    if direction_raw in ("long", "up", "bull", "bullish", "buy"):
-        direction = "long"
-    elif direction_raw in ("short", "down", "bear", "bearish", "sell"):
-        direction = "short"
-    else:
-        return "normal"
+    try:
+        prob = float(forecast.get("direction_probability") or 0)
+    except Exception:
+        prob = 0.0
 
-    prob = float(forecast.get("direction_probability") or 0)
+    direction = str(forecast.get("direction") or "").lower().strip()
     regime = str(features.get("regime") or "")
     r_1h = float(features.get("r_1h") or 0)
-    r_24h = float(features.get("r_24h") or 0)
     rsi = float(features.get("rsi_14") or 50)
     sr_signal = str(features.get("sr_signal") or "")
     volume = float(features.get("volume_24h") or 0)
 
-    btc_ctx = features.get("btc_context") or {}
-    btc_24h = float(btc_ctx.get("btc_24h_change") or 0)
+    forecast_snapshot = forecast.get("features_snapshot") or {}
+    if isinstance(forecast_snapshot, str):
+        try:
+            forecast_snapshot = json.loads(forecast_snapshot)
+        except Exception:
+            forecast_snapshot = {}
+
+    btc_ctx = forecast_snapshot.get("btc_context") or {}
+    btc_change = float(btc_ctx.get("btc_24h_change") or 0)
     btc_regime = str(btc_ctx.get("global_regime") or "")
     btc_structure_4h = str(btc_ctx.get("price_structure_4h") or "")
 
-    if direction == "short":
+    if direction == "down":
         if (
             prob >= 75
             and regime == "crash"
             and btc_regime == "bear_market"
             and btc_structure_4h in ("downtrend", "sideways")
-            and btc_24h <= 1.0
+            and btc_change <= 1.0
             and r_1h <= 0.05
             and 40 <= rsi <= 60
             and sr_signal in ("bounce_resistance", "neutral")
             and volume >= 1_000_000
         ):
             return "impulse_short"
+
+    if direction == "up":
+        if (
+            prob >= 75
+            and regime in ("oversold_crash", "reversal")
+            and r_1h >= 0
+            and btc_change >= -1.0
+            and volume >= 1_000_000
+        ):
+            return "impulse_long"
 
     return "normal"
 
@@ -683,13 +696,6 @@ async def trading_cycle():
         forecast = await get_latest_forecast(symbol, "4h")
         if not forecast:
             continue
-
-        forecast_snapshot = forecast.get("features_snapshot") or {}
-        if isinstance(forecast_snapshot, str):
-            try:
-                forecast_snapshot = json.loads(forecast_snapshot)
-            except Exception:
-                forecast_snapshot = {}
 
 
         fc_age = (datetime.now(timezone.utc) - forecast["created_at"].replace(tzinfo=timezone.utc)).total_seconds() / 60

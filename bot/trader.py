@@ -73,7 +73,8 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
 
 def check_entry(features: dict, forecast: dict, params: dict, setup_type: str = "normal") -> tuple[bool, str, str]:
     """
-    Усиленная логика входа v2
+    Боевая логика входа.
+    setup_type пока не влияет на решение и нужен только для маркировки/анализа.
     """
 
     if not forecast:
@@ -81,12 +82,11 @@ def check_entry(features: dict, forecast: dict, params: dict, setup_type: str = 
 
     try:
         prob = float(forecast.get("direction_probability") or 0)
-    except:
+    except Exception:
         prob = 0.0
 
     fc_direction = str(forecast.get("direction") or "").lower().strip()
 
-    # нормализуем направление
     if fc_direction in ("long", "up", "bull", "bullish", "buy"):
         direction = "long"
     elif fc_direction in ("short", "down", "bear", "bearish", "sell"):
@@ -94,87 +94,51 @@ def check_entry(features: dict, forecast: dict, params: dict, setup_type: str = 
     else:
         return False, "", "neutral_forecast"
 
-    # =========================
-    # 1. PROBABILITY
-    # =========================
+    # 1. Probability
     min_prob = float(params.get("min_forecast_probability") or 75)
-
     if prob < min_prob:
         return False, "", f"weak_prob({prob:.1f}<{min_prob})"
 
-    # =========================
-    # 2. REGIME FILTER
-    # =========================
+    # 2. Regime
     regime = str(features.get("regime") or "")
-
     if regime == "crash" and direction == "long":
         return False, "", "blocked_long_in_crash"
 
-    # =========================
-    # 3. MOMENTUM
-    # =========================
+    # 3. Momentum
     r_1h = float(features.get("r_1h") or 0)
 
     if direction == "long" and r_1h < 0:
         return False, "", f"bad_momentum_long({r_1h:.2f})"
 
-    # Для обычных short оставляем строгий фильтр.
-    # Для impulse_short не блокируем вход только из-за локального r_1h > 0.
     if direction == "short" and r_1h > 0:
-        if setup_type != "impulse_short":
-            return False, "", f"bad_momentum_short({r_1h:.2f})"
+        return False, "", f"bad_momentum_short({r_1h:.2f})"
 
-    # =========================
-    # 4. RSI FILTER
-    # =========================
+    # 4. RSI
     rsi = float(features.get("rsi_14") or 50)
 
     if direction == "long" and rsi > 70:
         return False, "", f"overbought_block(rsi={rsi:.1f})"
 
-    # Для обычных short: как раньше
-    # Для impulse_short: режем только совсем экстремально перепроданные
-    if direction == "short":
-        if setup_type == "impulse_short":
-            if rsi < 20:
-                return False, "", f"oversold_block(rsi={rsi:.1f})"
-        else:
-            if rsi < 40:
-                return False, "", f"oversold_block(rsi={rsi:.1f})"
+    if direction == "short" and rsi < 40:
+        return False, "", f"oversold_block(rsi={rsi:.1f})"
 
-    # =========================
-    # 5. VOLUME FILTER
-    # =========================
+    # 5. Volume
     volume = float(features.get("volume_24h") or 0)
-
     if volume < 1_000_000:
         return False, "", f"low_volume({volume:.0f})"
 
-    # =========================
-    # 6. IMPULSE / MOMENTUM FILTERS
-    # =========================
-
+    # 6. BTC / coin momentum
     btc_ctx = features.get("btc_context") or {}
     btc_24h = float(btc_ctx.get("btc_24h_change") or 0)
     r_24h = float(features.get("r_24h") or 0)
 
     if direction == "short":
-        if setup_type == "impulse_short":
-            # Для impulse_short:
-            # - не требуем сильного падения BTC за 24ч
-            # - не требуем, чтобы сама монета уже успела упасть за 24ч
-            # Эти случаи как раз и хотим тестировать.
-            pass
-        else:
-            if btc_24h > -1.5:
-                return False, "", f"no_btc_momentum({btc_24h:.2f})"
+        if btc_24h > -1.5:
+            return False, "", f"no_btc_momentum({btc_24h:.2f})"
 
-            if r_24h > -1.0:
-                return False, "", f"no_coin_momentum({r_24h:.2f})"
+        if r_24h > -1.0:
+            return False, "", f"no_coin_momentum({r_24h:.2f})"
 
-    # =========================
-    # OK → ВХОД
-    # =========================
     return True, direction, f"entry_ok(prob={prob:.1f})"
 
 
@@ -736,12 +700,6 @@ async def trading_cycle():
         setup_type = detect_setup_type(features, forecast)
         should, direction, reason = check_entry(features, forecast, params, setup_type)
 
-        # Ослабляем no_coin_momentum только для impulse_short
-        if not should and reason.startswith("no_coin_momentum") and setup_type == "impulse_short":
-            logger.info(f"OVERRIDE {symbol}: {reason} -> allowed for {setup_type}")
-            should = True
-            direction = "short"
-            reason = f"entry_ok_override({setup_type})"
 
         if not should:
             if reason not in ("neutral_forecast", "no_data"):

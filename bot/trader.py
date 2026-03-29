@@ -147,9 +147,6 @@ async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool
     fg_row = await db.fetchrow("SELECT value FROM crypto_fear_greed WHERE id='latest'")
     fg = float(fg_row["value"]) if fg_row else 50.0
 
-    min_prob = 75
-    if prob < min_prob:
-        return False, f"weak_signal({prob:.0f}%<{min_prob}%)"
 
     last_closed = await db.fetchrow(
         """SELECT exit_price, pnl_usdt, close_reason, closed_at
@@ -577,7 +574,9 @@ async def trading_cycle():
     ]
     logger.info(f"Cycle candidates prepared: {len(candidates)}")
 
-    new_trades = 0
+new_trades = 0
+
+async with aiohttp.ClientSession() as sr_session:
     for symbol in candidates:
         if new_trades >= MAX_NEW_PER_CYCLE:
             break
@@ -643,10 +642,9 @@ async def trading_cycle():
 
         sr_data = None
         try:
-            async with aiohttp.ClientSession() as sr_session:
-                sr_data = await analyze_sr(sr_session, symbol)
-                if sr_data:
-                    await update_features_sr(symbol, sr_data)
+            sr_data = await analyze_sr(sr_session, symbol)
+            if sr_data:
+                await update_features_sr(symbol, sr_data)
         except Exception as e:
             logger.debug(f"SR analysis error {symbol}: {e}")
 
@@ -663,9 +661,6 @@ async def trading_cycle():
             open_trades.append(trade)
             open_syms.add(symbol)
             account = await get_account()
-
-    logger.info(f"Cycle finished: opened {new_trades} new trades")
-
 
 async def run_trader():
     logger.info("Trader started")

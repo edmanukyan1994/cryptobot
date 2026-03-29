@@ -314,16 +314,32 @@ async def check_exit(trade, price, params):
         fc_dir = str(latest_fc.get("direction") or "").lower().strip()
         fc_prob = float(latest_fc.get("direction_probability") or 0)
 
+        # Жесткий выход только при сильном противоположном прогнозе
         if direction == "long" and fc_dir == "down" and fc_prob >= 75:
             return True, f"opposite_forecast_exit({fc_prob:.1f})", 100
 
         if direction == "short" and fc_dir == "up" and fc_prob >= 75:
             return True, f"opposite_forecast_exit({fc_prob:.1f})", 100
 
-        if pnl_pct <= -1.5 and fc_prob < 70:
+        skip_decay_exit = False
+
+        # 1. Не закрываем по decay/weak рядом с SR
+        if dist_to_sr_pct is not None and dist_to_sr_pct <= 1.5:
+            skip_decay_exit = True
+
+        # 2. Не закрываем по decay/weak, если глобальный импульс еще в сторону сделки
+        if not skip_decay_exit and latest_r_24h is not None:
+            if direction == "short" and latest_r_24h <= -0.02:
+                skip_decay_exit = True
+            elif direction == "long" and latest_r_24h >= 0.02:
+                skip_decay_exit = True
+
+        # 3. weak_forecast_exit — только если реально есть ослабление без поддержки тренда
+        if pnl_pct <= -1.5 and fc_prob < 70 and not skip_decay_exit:
             return True, f"weak_forecast_exit({fc_prob:.1f})", 100
 
-        if pnl_pct <= -0.5 and fc_prob <= 50:
+        # 4. forecast_decay_exit — только если реально есть decay без поддержки тренда
+        if pnl_pct <= -0.5 and fc_prob <= 50 and not skip_decay_exit:
             return True, f"forecast_decay_exit({fc_prob:.1f})", 100
 
     if has_tp1 and params.get("be_stop_after_tp1", True) and pnl_pct <= fee_pct:
@@ -333,6 +349,34 @@ async def check_exit(trade, price, params):
         "SELECT support_1, resistance_1 FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
         trade["symbol"]
     )
+        dist_to_sr_pct = None
+    if sr_features:
+        if direction == "long" and sr_features["support_1"]:
+            support_1 = float(sr_features["support_1"])
+            if entry > 0:
+                dist_to_sr_pct = abs(entry - support_1) / entry * 100
+
+        elif direction == "short" and sr_features["resistance_1"]:
+            resistance_1 = float(sr_features["resistance_1"])
+            if entry > 0:
+                dist_to_sr_pct = abs(entry - resistance_1) / entry * 100
+
+    latest_r_24h = None
+    latest_r_1h = None
+    latest_volume_24h = None
+    latest_sr_signal = None
+
+    latest_features = await db.fetchrow(
+        "SELECT r_1h, r_24h, volume_24h, sr_signal "
+        "FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
+        trade["symbol"]
+    )
+    if latest_features:
+        latest_r_1h = float(latest_features["r_1h"] or 0)
+        latest_r_24h = float(latest_features["r_24h"] or 0)
+        latest_volume_24h = float(latest_features["volume_24h"] or 0)
+        latest_sr_signal = str(latest_features["sr_signal"] or "")
+        
     if sr_features:
         if direction == "long" and sr_features["resistance_1"]:
             sr_tp = float(sr_features["resistance_1"])

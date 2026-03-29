@@ -309,6 +309,32 @@ async def check_exit(trade, price, params):
         if direction == "short" and price >= sl_price:
             return True, "stop_loss", 100
 
+    sr_features = await db.fetchrow(
+        "SELECT support_1, resistance_1 FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
+        trade["symbol"]
+    )
+
+    dist_to_sr_pct = None
+    latest_r_24h = None
+
+    if sr_features:
+        if direction == "long" and sr_features["support_1"]:
+            support_1 = float(sr_features["support_1"])
+            if entry > 0:
+                dist_to_sr_pct = abs(entry - support_1) / entry * 100
+
+        elif direction == "short" and sr_features["resistance_1"]:
+            resistance_1 = float(sr_features["resistance_1"])
+            if entry > 0:
+                dist_to_sr_pct = abs(entry - resistance_1) / entry * 100
+
+    latest_features = await db.fetchrow(
+        "SELECT r_24h FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
+        trade["symbol"]
+    )
+    if latest_features and latest_features["r_24h"] is not None:
+        latest_r_24h = float(latest_features["r_24h"])
+
     latest_fc = await get_latest_forecast(trade["symbol"], "4h")
     if latest_fc:
         fc_dir = str(latest_fc.get("direction") or "").lower().strip()
@@ -345,38 +371,6 @@ async def check_exit(trade, price, params):
     if has_tp1 and params.get("be_stop_after_tp1", True) and pnl_pct <= fee_pct:
         return True, "breakeven_stop", 100
 
-    sr_features = await db.fetchrow(
-        "SELECT support_1, resistance_1 FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
-        trade["symbol"]
-    )
-    dist_to_sr_pct = None
-    if sr_features:
-        if direction == "long" and sr_features["support_1"]:
-            support_1 = float(sr_features["support_1"])
-            if entry > 0:
-                dist_to_sr_pct = abs(entry - support_1) / entry * 100
-
-        elif direction == "short" and sr_features["resistance_1"]:
-            resistance_1 = float(sr_features["resistance_1"])
-            if entry > 0:
-                dist_to_sr_pct = abs(entry - resistance_1) / entry * 100
-
-    latest_r_24h = None
-    latest_r_1h = None
-    latest_volume_24h = None
-    latest_sr_signal = None
-
-    latest_features = await db.fetchrow(
-        "SELECT r_1h, r_24h, volume_24h, sr_signal "
-        "FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
-        trade["symbol"]
-    )
-    if latest_features:
-        latest_r_1h = float(latest_features["r_1h"] or 0)
-        latest_r_24h = float(latest_features["r_24h"] or 0)
-        latest_volume_24h = float(latest_features["volume_24h"] or 0)
-        latest_sr_signal = str(latest_features["sr_signal"] or "")
-        
     if sr_features:
         if direction == "long" and sr_features["resistance_1"]:
             sr_tp = float(sr_features["resistance_1"])
@@ -389,6 +383,7 @@ async def check_exit(trade, price, params):
             sr_tp_pct = (entry - sr_tp) / entry * 100
             if sr_tp_pct >= 0.5 and price <= sr_tp * 1.0035:
                 return True, "tp_sr_support", 100
+
 
     trail_start = float(params.get("trail_start_percent") or 2.5)
     if peak_pct >= trail_start:

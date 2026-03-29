@@ -27,12 +27,13 @@ SECTOR = {
 
 def get_allowed_direction(fg: float) -> str:
     return "both"
+
+
 def detect_setup_type(features: dict, forecast: dict) -> str:
     """
     Только маркировка для анализа.
     На торговое поведение не влияет.
     """
-
     try:
         prob = float(forecast.get("direction_probability") or 0)
     except Exception:
@@ -86,10 +87,8 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
 
 def check_entry(features: dict, forecast: dict, params: dict, setup_type: str = "normal") -> tuple[bool, str, str]:
     """
-    Боевая логика входа.
     setup_type пока не влияет на решение и нужен только для маркировки/анализа.
     """
-
     if not forecast:
         return False, "", "no_data"
 
@@ -107,17 +106,14 @@ def check_entry(features: dict, forecast: dict, params: dict, setup_type: str = 
     else:
         return False, "", "neutral_forecast"
 
-    # 1. Probability
-    min_prob = float(params.get("min_forecast_probability") or 75)
+    min_prob = float(params.get("min_probability") or params.get("min_forecast_probability") or 75)
     if prob < min_prob:
         return False, "", f"weak_prob({prob:.1f}<{min_prob})"
 
-    # 2. Regime
     regime = str(features.get("regime") or "")
     if regime == "crash" and direction == "long":
         return False, "", "blocked_long_in_crash"
 
-    # 3. Momentum
     r_1h = float(features.get("r_1h") or 0)
 
     if direction == "long" and r_1h < 0:
@@ -126,91 +122,22 @@ def check_entry(features: dict, forecast: dict, params: dict, setup_type: str = 
     if direction == "short" and r_1h > 0:
         return False, "", f"bad_momentum_short({r_1h:.2f})"
 
-    # 4. RSI
     rsi = float(features.get("rsi_14") or 50)
 
-    if direction == "long" and rsi > 70:
-        return False, "", f"overbought_block(rsi={rsi:.1f})"
+    if direction == "long" and rsi > 65:
+        return False, "", f"rsi_high({rsi:.1f})"
 
-    if direction == "short" and rsi < 40:
-        return False, "", f"oversold_block(rsi={rsi:.1f})"
+    if direction == "short" and rsi < 35:
+        return False, "", f"rsi_low({rsi:.1f})"
 
-    # 5. Volume
     volume = float(features.get("volume_24h") or 0)
     if volume < 1_000_000:
         return False, "", f"low_volume({volume:.0f})"
 
-    # 6. BTC / coin momentum
-    btc_ctx = features.get("btc_context") or {}
-    btc_24h = float(btc_ctx.get("btc_24h_change") or 0)
-    r_24h = float(features.get("r_24h") or 0)
-
-    if direction == "short":
-        if btc_24h > -1.5:
-            return False, "", f"no_btc_momentum({btc_24h:.2f})"
-
-        if r_24h > -1.0:
-            return False, "", f"no_coin_momentum({r_24h:.2f})"
-
     return True, direction, f"entry_ok(prob={prob:.1f})"
 
 
-def detect_setup_type(features: dict, forecast: dict) -> str:
-    """
-    Классификация сетапа:
-    - impulse_short / impulse_long
-    - normal
-    """
-
-    try:
-        prob = float(forecast.get("direction_probability") or 0)
-    except:
-        prob = 0.0
-
-    direction = str(forecast.get("direction") or "").lower()
-    regime = str(features.get("regime") or "")
-    r_1h = float(features.get("r_1h") or 0)
-    r_24h = float(features.get("r_24h") or 0)
-
-    btc_ctx = features.get("btc_context") or {}
-    btc_change = float(btc_ctx.get("btc_24h_change") or 0)
-    btc_trend = btc_ctx.get("price_structure_1d")
-
-    sr_signal = features.get("sr_signal")
-
-    # =========================
-    # ИМПУЛЬСНЫЙ ШОРТ
-    # =========================
-    if (
-        direction == "down"
-        and prob >= 75
-        and regime == "crash"
-        and r_1h < -0.03
-        and btc_change < -1
-        and btc_trend in ("downtrend", "bear_market")
-    ):
-        return "impulse_short"
-
-    # =========================
-    # ИМПУЛЬСНЫЙ ЛОНГ (на будущее)
-    # =========================
-    if (
-        direction == "up"
-        and prob >= 75
-        and regime in ("oversold_crash", "reversal")
-        and r_1h > 0.03
-        and btc_change > 1
-    ):
-        return "impulse_long"
-
-    return "normal"
-
-
 async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool, str]:
-    """
-    Умная проверка переоткрытия — без cooldown по времени.
-    Открываем снова только если сигнал реально подтверждает вход.
-    """
     fc_age = (datetime.now(timezone.utc) - forecast["created_at"].replace(tzinfo=timezone.utc)).total_seconds() / 60
     if fc_age > 15:
         return False, f"stale_forecast({fc_age:.0f}min)"
@@ -288,9 +215,6 @@ async def get_price(symbol: str) -> float | None:
 
 
 async def get_sl_price(symbol: str, price: float, direction: str) -> tuple[float, float]:
-    """
-    Фиксированный стоп 15% от цены входа.
-    """
     sl_pct = 15.0
 
     if direction == "short":
@@ -317,7 +241,7 @@ async def open_trade(account, symbol, direction, price, params, forecast, sr_dat
     crypto = size / price
     sl_price, sl_pct = await get_sl_price(symbol, price, direction)
     tp1 = float(params.get("tp1_percent") or 2.0)
-    
+
     row = await db.fetchrow(
         """INSERT INTO crypto_demo_trades
            (account_id,symbol,trade_type,amount_usdt,amount_crypto,entry_price,
@@ -393,24 +317,20 @@ async def check_exit(trade, price, params):
         if direction == "short" and price >= sl_price:
             return True, "stop_loss", 100
 
-    # Авто-выход по деградации / развороту прогноза
     latest_fc = await get_latest_forecast(trade["symbol"], "4h")
     if latest_fc:
         fc_dir = str(latest_fc.get("direction") or "").lower().strip()
         fc_prob = float(latest_fc.get("direction_probability") or 0)
 
-        # 1) Жесткий выход при сильном противоположном прогнозе
         if direction == "long" and fc_dir == "down" and fc_prob >= 75:
             return True, f"opposite_forecast_exit({fc_prob:.1f})", 100
 
         if direction == "short" and fc_dir == "up" and fc_prob >= 75:
             return True, f"opposite_forecast_exit({fc_prob:.1f})", 100
-            
-        # 2) Ранний выход: сделка уже в минусе, а прогноз заметно ослаб
+
         if pnl_pct <= -1.5 and fc_prob < 70:
             return True, f"weak_forecast_exit({fc_prob:.1f})", 100
 
-        # 3) Совсем слабый сигнал / neutral — выходим почти сразу
         if pnl_pct <= -0.5 and fc_prob <= 50:
             return True, f"forecast_decay_exit({fc_prob:.1f})", 100
 
@@ -422,32 +342,19 @@ async def check_exit(trade, price, params):
         trade["symbol"]
     )
     if sr_features:
-        # LONG: закрываемся полностью, когда почти дошли до сопротивления
         if direction == "long" and sr_features["resistance_1"]:
             sr_tp = float(sr_features["resistance_1"])
             sr_tp_pct = (sr_tp - entry) / entry * 100
-
-            # Имеет смысл только если сопротивление действительно выше входа
             if sr_tp_pct >= 0.5:
-                # если до сопротивления осталось <= 0.35%, закрываемся полностью
                 if price >= sr_tp * 0.9965:
                     return True, "tp_sr_resistance", 100
 
-        # SHORT: закрываемся полностью, когда почти дошли до поддержки
         elif direction == "short" and sr_features["support_1"]:
             sr_tp = float(sr_features["support_1"])
             sr_tp_pct = (entry - sr_tp) / entry * 100
-
-            # Имеет смысл только если поддержка действительно ниже входа
             if sr_tp_pct >= 0.5:
-                # если до поддержки осталось <= 0.35%, закрываемся полностью
                 if price <= sr_tp * 1.0035:
                     return True, "tp_sr_support", 100
-    # Старые partial TP отключены.
-    # Теперь основной выход:
-    # 1) у цели по S/R
-    # 2) по trailing после нормального движения
-    # 3) по stop-loss
 
     trail_start = float(params.get("trail_start_percent") or 2.5)
     if peak_pct >= trail_start:
@@ -456,7 +363,6 @@ async def check_exit(trade, price, params):
             trade["symbol"]
         )
 
-        # Даём сделке дышать заметно больше, чем раньше
         offset = 1.8
 
         if atr_row and atr_row["atr"] and atr_row["price"]:
@@ -466,8 +372,6 @@ async def check_exit(trade, price, params):
         if pnl_pct <= peak_pct - offset:
             return True, "trailing_stop", 100
 
-    # Мягкая защита прибыли только после заметного движения.
-    # Раньше срабатывало слишком рано и душило хорошие сделки.
     if peak_pct >= 5.0:
         floor = max(1.0, peak_pct * 0.35)
         if pnl_pct <= floor:
@@ -487,7 +391,6 @@ async def close_trade(trade, price, reason, close_pct, account, params):
     fee = float(params.get("fee_rate_taker") or 0.055)
     prev = trade.get("close_reason") or ""
 
-    # Реалистичное проскальзывание на выходе
     slippage_pct = float(params.get("slippage_percent") or 0.15) / 100.0
 
     exec_price = price
@@ -596,7 +499,6 @@ async def close_trade(trade, price, reason, close_pct, account, params):
 
 
 async def fast_exit_check(prices: dict):
-    """Быстрая проверка по WebSocket ценам каждые 10 секунд."""
     params = await load_params()
     account = await get_account()
     if not account or params.get("kill_switch_active"):
@@ -697,13 +599,12 @@ async def trading_cycle():
         if not forecast:
             continue
 
-
         fc_age = (datetime.now(timezone.utc) - forecast["created_at"].replace(tzinfo=timezone.utc)).total_seconds() / 60
         if fc_age > fc_max_age:
             continue
+
         setup_type = detect_setup_type(features, forecast)
         should, direction, reason = check_entry(features, forecast, params, setup_type)
-
 
         if not should:
             if reason not in ("neutral_forecast", "no_data"):
@@ -764,6 +665,7 @@ async def trading_cycle():
             account = await get_account()
 
     logger.info(f"Cycle finished: opened {new_trades} new trades")
+
 
 async def run_trader():
     logger.info("Trader started")

@@ -272,8 +272,31 @@ async def open_trade(account, symbol, direction, price, params, forecast, sr_dat
             f"sl={sl_pct}% | setup={setup_type}"
         )
 
+    features = forecast.get("features_snapshot") or {}
+
+    if isinstance(features, str):
+        try:
+            features = json.loads(features)
+        except Exception:
+            features = {}
+
+    btc_ctx = features.get("btc_context") or {}
+
+    reason_text = (
+        f"\n\n📊 <b>Причина входа:</b>\n"
+        f"🎯 Вероятность: {float(forecast.get('direction_probability') or 0):.1f}%\n"
+        f"🧠 Сетап: {setup_type}\n"
+        f"📉 Тренд: {features.get('regime', '-')}\n"
+        f"📊 RSI: {float(features.get('rsi_14') or 0):.1f}\n"
+        f"⚡ Импульс 1ч: {float(features.get('r_1h') or 0):.3f}\n"
+        f"🌊 Импульс 24ч: {float(features.get('r_24h') or 0):.3f}\n"
+        f"💰 Объем: {float(features.get('volume_24h') or 0) / 1_000_000:.1f}M\n"
+        f"🧱 SR сигнал: {features.get('sr_signal', '-')}\n"
+        f"₿ BTC: {btc_ctx.get('global_regime', '-')} / {btc_ctx.get('price_structure_4h', '-')}"
+    )
+
     await tg.send(
-        tg.fmt_open(symbol, direction, price, size, sl_pct, tp1),
+        tg.fmt_open(symbol, direction, price, size, sl_pct, tp1) + reason_text,
         account.get("telegram_chat_id") or TELEGRAM_CHAT_ID
     )
     return dict(row)

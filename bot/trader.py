@@ -83,7 +83,6 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
             return "impulse_long"
 
     return "normal"
-
 def detect_market_mode(features: dict, forecast: dict) -> str:
     forecast_snapshot = forecast.get("features_snapshot") or {}
     if isinstance(forecast_snapshot, str):
@@ -97,11 +96,17 @@ def detect_market_mode(features: dict, forecast: dict) -> str:
     btc_regime = str(btc_ctx.get("global_regime") or "")
     btc_structure = str(btc_ctx.get("price_structure_4h") or "")
 
-    if btc_regime == "bear_market" and btc_structure == "downtrend":
-        return "bear"
+    if btc_regime == "bear_market":
+        if btc_structure == "downtrend":
+            return "bear"
+        if btc_structure == "sideways":
+            return "bear_sideways"
 
-    if btc_regime == "bull_market" and btc_structure == "uptrend":
-        return "bull"
+    if btc_regime == "bull_market":
+        if btc_structure == "uptrend":
+            return "bull"
+        if btc_structure == "sideways":
+            return "bull_sideways"
 
     return "sideways"
 

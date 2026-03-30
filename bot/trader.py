@@ -87,7 +87,8 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
 
 def check_entry(features: dict, forecast: dict, params: dict, setup_type: str = "normal") -> tuple[bool, str, str]:
     """
-    setup_type пока не влияет на решение и нужен только для маркировки/анализа.
+    setup_type пока не влияет на long.
+    Для short normal добавлены более жесткие фильтры входа.
     """
     if not forecast:
         return False, "", "no_data"
@@ -115,6 +116,10 @@ def check_entry(features: dict, forecast: dict, params: dict, setup_type: str = 
         return False, "", "blocked_long_in_crash"
 
     r_1h = float(features.get("r_1h") or 0)
+    r_24h = float(features.get("r_24h") or 0)
+    rsi = float(features.get("rsi_14") or 50)
+    sr_signal = str(features.get("sr_signal") or "")
+    volume = float(features.get("volume_24h") or 0)
 
     if direction == "long" and r_1h < 0:
         return False, "", f"bad_momentum_long({r_1h:.2f})"
@@ -122,17 +127,31 @@ def check_entry(features: dict, forecast: dict, params: dict, setup_type: str = 
     if direction == "short" and r_1h > 0:
         return False, "", f"bad_momentum_short({r_1h:.2f})"
 
-    rsi = float(features.get("rsi_14") or 50)
-
     if direction == "long" and rsi > 65:
         return False, "", f"rsi_high({rsi:.1f})"
 
     if direction == "short" and rsi < 35:
         return False, "", f"rsi_low({rsi:.1f})"
 
-    volume = float(features.get("volume_24h") or 0)
     if volume < 1_000_000:
         return False, "", f"low_volume({volume:.0f})"
+
+    if direction == "short" and setup_type == "normal":
+        if sr_signal == "bounce_support":
+            return False, "", "short_blocked_bounce_support"
+
+        if r_1h > -0.02:
+            return False, "", f"weak_momentum_short({r_1h:.2f})"
+
+        if r_24h > 0:
+            return False, "", f"bad_higher_tf_short({r_24h:.2f})"
+
+        if rsi >= 65:
+            return False, "", f"short_rsi_too_high({rsi:.1f})"
+
+    if direction == "short":
+        if r_1h > 0.02:
+            return False, "", f"bounce_up_short_block({r_1h:.2f})"
 
     return True, direction, f"entry_ok(prob={prob:.1f})"
 
@@ -220,7 +239,7 @@ async def get_atr_sl(symbol: str, price: float) -> float:
     return sl_pct
 
 
-async def open_trade(account, symbol, direction, price, params, forecast, sr_data=None, setup_type="normal"):
+async def open_trade(account, symbol, direction, price, params, forecast, features, sr_data=None, setup_type="normal"):
     if not price or price <= 0:
         logger.warning(f"Invalid price {symbol}: {price}")
         return None
@@ -234,6 +253,27 @@ async def open_trade(account, symbol, direction, price, params, forecast, sr_dat
     crypto = size / price
     sl_price, sl_pct = await get_sl_price(symbol, price, direction)
     tp1 = float(params.get("tp1_percent") or 2.0)
+
+    entry_features = forecast.get("features_snapshot") or {}
+    if isinstance(entry_features, str):
+        try:
+            entry_features = json.loads(entry_features)
+        except Exception:
+            entry_features = {}
+
+    if not entry_features:
+        entry_features = {
+            "regime": features.get("regime"),
+            "rsi_14": features.get("rsi_14"),
+            "r_1h": features.get("r_1h"),
+            "r_24h": features.get("r_24h"),
+            "volume_24h": features.get("volume_24h"),
+            "sr_signal": features.get("sr_signal"),
+            "btc_context": {
+                "global_regime": features.get("btc_regime"),
+                "price_structure_4h": features.get("btc_structure_4h"),
+            },
+        }
 
     row = await db.fetchrow(
         """INSERT INTO crypto_demo_trades
@@ -249,7 +289,7 @@ async def open_trade(account, symbol, direction, price, params, forecast, sr_dat
         forecast.get("id"),
         forecast.get("direction"),
         forecast.get("direction_probability"),
-        json.dumps(forecast.get("features_snapshot") or {}),
+        json.dumps(entry_features),
         setup_type
     )
     if not row:
@@ -272,26 +312,18 @@ async def open_trade(account, symbol, direction, price, params, forecast, sr_dat
             f"sl={sl_pct}% | setup={setup_type}"
         )
 
-    features = forecast.get("features_snapshot") or {}
-
-    if isinstance(features, str):
-        try:
-            features = json.loads(features)
-        except Exception:
-            features = {}
-
-    btc_ctx = features.get("btc_context") or {}
+    btc_ctx = entry_features.get("btc_context") or {}
 
     reason_text = (
         f"\n\n📊 <b>Причина входа:</b>\n"
         f"🎯 Вероятность: {float(forecast.get('direction_probability') or 0):.1f}%\n"
         f"🧠 Сетап: {setup_type}\n"
-        f"📉 Тренд: {features.get('regime', '-')}\n"
-        f"📊 RSI: {float(features.get('rsi_14') or 0):.1f}\n"
-        f"⚡ Импульс 1ч: {float(features.get('r_1h') or 0):.3f}\n"
-        f"🌊 Импульс 24ч: {float(features.get('r_24h') or 0):.3f}\n"
-        f"💰 Объем: {float(features.get('volume_24h') or 0) / 1_000_000:.1f}M\n"
-        f"🧱 SR сигнал: {features.get('sr_signal', '-')}\n"
+        f"📉 Тренд: {entry_features.get('regime', '-')}\n"
+        f"📊 RSI: {float(entry_features.get('rsi_14') or 0):.1f}\n"
+        f"⚡ Импульс 1ч: {float(entry_features.get('r_1h') or 0):.3f}\n"
+        f"🌊 Импульс 24ч: {float(entry_features.get('r_24h') or 0):.3f}\n"
+        f"💰 Объем: {float(entry_features.get('volume_24h') or 0) / 1_000_000:.1f}M\n"
+        f"🧱 SR сигнал: {entry_features.get('sr_signal', '-')}\n"
         f"₿ BTC: {btc_ctx.get('global_regime', '-')} / {btc_ctx.get('price_structure_4h', '-')}"
     )
 
@@ -709,7 +741,7 @@ async def trading_cycle():
 
             logger.info(f"SETUP {symbol}: {setup_type}")
 
-            trade = await open_trade(account, symbol, direction, price, params, forecast, sr_data, setup_type)
+            trade = await open_trade(account, symbol, direction, price, params, forecast, features, sr_data, setup_type)
             if trade:
                 new_trades += 1
                 open_trades.append(trade)

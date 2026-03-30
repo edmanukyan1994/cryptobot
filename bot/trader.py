@@ -120,9 +120,11 @@ def check_entry(
 ) -> tuple[bool, str, str]:
     """
     Адаптивный вход под режим рынка:
-    - bear: основной приоритет short
-    - bull: основной приоритет long
-    - sideways: осторожный режим
+    - bear: сильный медвежий рынок
+    - bear_sideways: медвежий рынок, но структура BTC боковая
+    - bull: сильный бычий рынок
+    - bull_sideways: бычий рынок, но структура BTC боковая
+    - sideways: нейтральный режим
     """
     if not forecast:
         return False, "", "no_data"
@@ -141,7 +143,6 @@ def check_entry(
     else:
         return False, "", "neutral_forecast"
 
-    # ЖЕСТКИЙ порог. Никаких значений из БД.
     min_prob = 75.0
     if prob < min_prob:
         return False, "", f"weak_prob({prob:.1f}<{min_prob})"
@@ -156,94 +157,124 @@ def check_entry(
     if volume < 1_000_000:
         return False, "", f"low_volume({volume:.0f})"
 
+    # ---------------- BEAR ----------------
     if market_mode == "bear":
         if direction == "long":
             if regime == "crash":
                 return False, "", "blocked_long_in_crash"
-
             if r_1h < 0:
                 return False, "", f"bad_momentum_long({r_1h:.2f})"
-
             if rsi > 65:
                 return False, "", f"rsi_high({rsi:.1f})"
-
             if r_24h < -0.02 and setup_type != "impulse_long":
                 return False, "", f"bear_mode_long_block({r_24h:.2f})"
-
             return True, direction, f"entry_ok_bear_long(prob={prob:.1f})"
 
         if direction == "short":
             if sr_signal == "bounce_support":
                 return False, "", "short_blocked_bounce_support"
-
             if setup_type == "normal" and r_1h > -0.02:
                 return False, "", f"weak_momentum_short({r_1h:.2f})"
-
             if r_1h > 0.02:
                 return False, "", f"bounce_up_short_block({r_1h:.2f})"
-
             if r_24h > 0:
                 return False, "", f"bad_higher_tf_short({r_24h:.2f})"
-
             if rsi < 35:
                 return False, "", f"rsi_low({rsi:.1f})"
-
             if setup_type == "normal" and rsi >= 65:
                 return False, "", f"short_rsi_too_high({rsi:.1f})"
-
             return True, direction, f"entry_ok_bear_short(prob={prob:.1f})"
 
+    # ------------ BEAR SIDEWAYS ------------
+    elif market_mode == "bear_sideways":
+        if direction == "long":
+            if regime == "crash":
+                return False, "", "blocked_long_in_crash"
+            if r_1h < 0:
+                return False, "", f"bad_momentum_long({r_1h:.2f})"
+            if r_24h < -0.03:
+                return False, "", f"bear_sideways_long_block({r_24h:.2f})"
+            if rsi > 62:
+                return False, "", f"rsi_high({rsi:.1f})"
+            return True, direction, f"entry_ok_bear_sideways_long(prob={prob:.1f})"
+
+        if direction == "short":
+            if sr_signal == "bounce_support":
+                return False, "", "short_blocked_bounce_support"
+            if r_1h > 0.01:
+                return False, "", f"bear_sideways_bad_short_momentum({r_1h:.2f})"
+            if r_24h > 0.02:
+                return False, "", f"bear_sideways_bad_higher_tf_short({r_24h:.2f})"
+            if rsi < 38:
+                return False, "", f"bear_sideways_short_rsi_low({rsi:.1f})"
+            if rsi >= 68:
+                return False, "", f"bear_sideways_short_rsi_high({rsi:.1f})"
+            return True, direction, f"entry_ok_bear_sideways_short(prob={prob:.1f})"
+
+    # ---------------- BULL ----------------
     elif market_mode == "bull":
         if direction == "short":
             if setup_type != "impulse_short":
                 return False, "", "short_blocked_in_bull"
-
             if sr_signal != "bounce_resistance":
                 return False, "", "short_needs_resistance_in_bull"
-
             if r_1h < 0:
                 return False, "", f"late_short_in_bull({r_1h:.2f})"
-
             if rsi < 60:
                 return False, "", f"short_rsi_not_hot_enough({rsi:.1f})"
-
             return True, direction, f"entry_ok_bull_short(prob={prob:.1f})"
 
         if direction == "long":
             if r_1h < 0:
                 return False, "", f"weak_momentum_long({r_1h:.2f})"
-
             if r_24h < 0:
                 return False, "", f"bad_higher_tf_long({r_24h:.2f})"
-
             if sr_signal == "bounce_resistance":
                 return False, "", "long_blocked_bounce_resistance"
-
             if rsi < 40:
                 return False, "", f"long_rsi_too_low({rsi:.1f})"
-
             if rsi > 75:
                 return False, "", f"long_rsi_too_high({rsi:.1f})"
-
             return True, direction, f"entry_ok_bull_long(prob={prob:.1f})"
 
-    else:  # sideways
+    # ------------ BULL SIDEWAYS ------------
+    elif market_mode == "bull_sideways":
+        if direction == "short":
+            if setup_type != "impulse_short":
+                return False, "", "short_blocked_in_bull_sideways"
+            if sr_signal != "bounce_resistance":
+                return False, "", "short_needs_resistance_in_bull_sideways"
+            if rsi < 62:
+                return False, "", f"bull_sideways_short_rsi_low({rsi:.1f})"
+            return True, direction, f"entry_ok_bull_sideways_short(prob={prob:.1f})"
+
+        if direction == "long":
+            if r_1h < -0.01:
+                return False, "", f"bull_sideways_bad_long_momentum({r_1h:.2f})"
+            if r_24h < -0.01:
+                return False, "", f"bull_sideways_bad_higher_tf_long({r_24h:.2f})"
+            if sr_signal == "bounce_resistance":
+                return False, "", "bull_sideways_long_blocked_resistance"
+            if rsi < 42:
+                return False, "", f"bull_sideways_long_rsi_low({rsi:.1f})"
+            if rsi > 72:
+                return False, "", f"bull_sideways_long_rsi_high({rsi:.1f})"
+            return True, direction, f"entry_ok_bull_sideways_long(prob={prob:.1f})"
+
+    # --------------- SIDEWAYS ---------------
+    else:
         if direction == "long":
             if r_1h < -0.01:
                 return False, "", f"sideways_bad_long_momentum({r_1h:.2f})"
-
             if rsi > 70:
                 return False, "", f"sideways_long_rsi_high({rsi:.1f})"
-
             return True, direction, f"entry_ok_sideways_long(prob={prob:.1f})"
 
         if direction == "short":
             if r_1h > 0.01:
                 return False, "", f"sideways_bad_short_momentum({r_1h:.2f})"
-
             if rsi < 35:
                 return False, "", f"sideways_short_rsi_low({rsi:.1f})"
-
             return True, direction, f"entry_ok_sideways_short(prob={prob:.1f})"
 
     return False, "", "no_rule_match"

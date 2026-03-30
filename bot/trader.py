@@ -84,11 +84,31 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
 
     return "normal"
 
+def detect_market_mode(features: dict) -> str:
+    btc_regime = str(features.get("btc_regime") or "")
+    btc_structure = str(features.get("btc_structure_4h") or "")
 
-def check_entry(features: dict, forecast: dict, params: dict, setup_type: str = "normal") -> tuple[bool, str, str]:
+    if btc_regime == "bear_market" and btc_structure == "downtrend":
+        return "bear"
+
+    if btc_regime == "bull_market" and btc_structure == "uptrend":
+        return "bull"
+
+    return "sideways"
+
+
+def check_entry(
+    features: dict,
+    forecast: dict,
+    params: dict,
+    setup_type: str = "normal",
+    market_mode: str = "sideways",
+) -> tuple[bool, str, str]:
     """
-    setup_type пока не влияет на long.
-    Для short normal добавлены более жесткие фильтры входа.
+    Адаптивный вход под режим рынка:
+    - bear: основной приоритет short
+    - bull: основной приоритет long
+    - sideways: осторожный режим
     """
     if not forecast:
         return False, "", "no_data"
@@ -112,48 +132,106 @@ def check_entry(features: dict, forecast: dict, params: dict, setup_type: str = 
         return False, "", f"weak_prob({prob:.1f}<{min_prob})"
 
     regime = str(features.get("regime") or "")
-    if regime == "crash" and direction == "long":
-        return False, "", "blocked_long_in_crash"
-
     r_1h = float(features.get("r_1h") or 0)
     r_24h = float(features.get("r_24h") or 0)
     rsi = float(features.get("rsi_14") or 50)
     sr_signal = str(features.get("sr_signal") or "")
     volume = float(features.get("volume_24h") or 0)
 
-    if direction == "long" and r_1h < 0:
-        return False, "", f"bad_momentum_long({r_1h:.2f})"
-
-    if direction == "short" and r_1h > 0:
-        return False, "", f"bad_momentum_short({r_1h:.2f})"
-
-    if direction == "long" and rsi > 65:
-        return False, "", f"rsi_high({rsi:.1f})"
-
-    if direction == "short" and rsi < 35:
-        return False, "", f"rsi_low({rsi:.1f})"
-
     if volume < 1_000_000:
         return False, "", f"low_volume({volume:.0f})"
 
-    if direction == "short" and setup_type == "normal":
-        if sr_signal == "bounce_support":
-            return False, "", "short_blocked_bounce_support"
+    if market_mode == "bear":
+        if direction == "long":
+            if regime == "crash":
+                return False, "", "blocked_long_in_crash"
 
-        if r_1h > -0.02:
-            return False, "", f"weak_momentum_short({r_1h:.2f})"
+            if r_1h < 0:
+                return False, "", f"bad_momentum_long({r_1h:.2f})"
 
-        if r_24h > 0:
-            return False, "", f"bad_higher_tf_short({r_24h:.2f})"
+            if rsi > 65:
+                return False, "", f"rsi_high({rsi:.1f})"
 
-        if rsi >= 65:
-            return False, "", f"short_rsi_too_high({rsi:.1f})"
+            if r_24h < -0.02 and setup_type != "impulse_long":
+                return False, "", f"bear_mode_long_block({r_24h:.2f})"
 
-    if direction == "short":
-        if r_1h > 0.02:
-            return False, "", f"bounce_up_short_block({r_1h:.2f})"
+            return True, direction, f"entry_ok_bear_long(prob={prob:.1f})"
 
-    return True, direction, f"entry_ok(prob={prob:.1f})"
+        if direction == "short":
+            if sr_signal == "bounce_support":
+                return False, "", "short_blocked_bounce_support"
+
+            if setup_type == "normal" and r_1h > -0.02:
+                return False, "", f"weak_momentum_short({r_1h:.2f})"
+
+            if r_1h > 0.02:
+                return False, "", f"bounce_up_short_block({r_1h:.2f})"
+
+            if r_24h > 0:
+                return False, "", f"bad_higher_tf_short({r_24h:.2f})"
+
+            if rsi < 35:
+                return False, "", f"rsi_low({rsi:.1f})"
+
+            if setup_type == "normal" and rsi >= 65:
+                return False, "", f"short_rsi_too_high({rsi:.1f})"
+
+            return True, direction, f"entry_ok_bear_short(prob={prob:.1f})"
+
+    elif market_mode == "bull":
+        if direction == "short":
+            if setup_type != "impulse_short":
+                return False, "", "short_blocked_in_bull"
+
+            if sr_signal != "bounce_resistance":
+                return False, "", "short_needs_resistance_in_bull"
+
+            if r_1h < 0:
+                return False, "", f"late_short_in_bull({r_1h:.2f})"
+
+            if rsi < 60:
+                return False, "", f"short_rsi_not_hot_enough({rsi:.1f})"
+
+            return True, direction, f"entry_ok_bull_short(prob={prob:.1f})"
+
+        if direction == "long":
+            if r_1h < 0:
+                return False, "", f"weak_momentum_long({r_1h:.2f})"
+
+            if r_24h < 0:
+                return False, "", f"bad_higher_tf_long({r_24h:.2f})"
+
+            if sr_signal == "bounce_resistance":
+                return False, "", "long_blocked_bounce_resistance"
+
+            if rsi < 40:
+                return False, "", f"long_rsi_too_low({rsi:.1f})"
+
+            if rsi > 75:
+                return False, "", f"long_rsi_too_high({rsi:.1f})"
+
+            return True, direction, f"entry_ok_bull_long(prob={prob:.1f})"
+
+    else:  # sideways
+        if direction == "long":
+            if r_1h < -0.01:
+                return False, "", f"sideways_bad_long_momentum({r_1h:.2f})"
+
+            if rsi > 70:
+                return False, "", f"sideways_long_rsi_high({rsi:.1f})"
+
+            return True, direction, f"entry_ok_sideways_long(prob={prob:.1f})"
+
+        if direction == "short":
+            if r_1h > 0.01:
+                return False, "", f"sideways_bad_short_momentum({r_1h:.2f})"
+
+            if rsi < 35:
+                return False, "", f"sideways_short_rsi_low({rsi:.1f})"
+
+            return True, direction, f"entry_ok_sideways_short(prob={prob:.1f})"
+
+    return False, "", "no_rule_match"
 
 
 async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool, str]:
@@ -688,8 +766,9 @@ async def trading_cycle():
             if fc_age > fc_max_age:
                 continue
 
+            market_mode = detect_market_mode(features)
             setup_type = detect_setup_type(features, forecast)
-            should, direction, reason = check_entry(features, forecast, params, setup_type)
+            should, direction, reason = check_entry(features, forecast, params, setup_type, market_mode)
 
             if not should:
                 if reason not in ("neutral_forecast", "no_data"):
@@ -739,7 +818,7 @@ async def trading_cycle():
                 logger.info(f"SR blocked {symbol} {direction}: {sr_reason}")
                 continue
 
-            logger.info(f"SETUP {symbol}: {setup_type}")
+            logger.info(f"SETUP {symbol}: mode={market_mode} setup={setup_type}")
 
             trade = await open_trade(account, symbol, direction, price, params, forecast, features, sr_data, setup_type)
             if trade:

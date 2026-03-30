@@ -84,9 +84,18 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
 
     return "normal"
 
-def detect_market_mode(features: dict) -> str:
-    btc_regime = str(features.get("btc_regime") or "")
-    btc_structure = str(features.get("btc_structure_4h") or "")
+def detect_market_mode(features: dict, forecast: dict) -> str:
+    forecast_snapshot = forecast.get("features_snapshot") or {}
+    if isinstance(forecast_snapshot, str):
+        try:
+            forecast_snapshot = json.loads(forecast_snapshot)
+        except Exception:
+            forecast_snapshot = {}
+
+    btc_ctx = forecast_snapshot.get("btc_context") or {}
+
+    btc_regime = str(btc_ctx.get("global_regime") or "")
+    btc_structure = str(btc_ctx.get("price_structure_4h") or "")
 
     if btc_regime == "bear_market" and btc_structure == "downtrend":
         return "bear"
@@ -127,7 +136,8 @@ def check_entry(
     else:
         return False, "", "neutral_forecast"
 
-    min_prob = float(params.get("min_probability") or params.get("min_forecast_probability") or 75)
+    # ЖЕСТКИЙ порог. Никаких значений из БД.
+    min_prob = 75.0
     if prob < min_prob:
         return False, "", f"weak_prob({prob:.1f}<{min_prob})"
 
@@ -766,7 +776,7 @@ async def trading_cycle():
             if fc_age > fc_max_age:
                 continue
 
-            market_mode = detect_market_mode(features)
+            market_mode = detect_market_mode(features, forecast)
             setup_type = detect_setup_type(features, forecast)
             should, direction, reason = check_entry(features, forecast, params, setup_type, market_mode)
 

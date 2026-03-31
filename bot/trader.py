@@ -29,61 +29,178 @@ def get_allowed_direction(fg: float) -> str:
     return "both"
 
 
+def normalize_setup_type(setup_type: str) -> str:
+    s = str(setup_type or "").strip().lower()
+    mapping = {
+        "impulse_short": "short_impulse",
+        "impulse_long": "long_impulse",
+        "short_impulse": "short_impulse",
+        "long_impulse": "long_impulse",
+        "long_reversal": "long_reversal",
+        "long_trend": "long_trend",
+        "short_trend": "short_trend",
+        "normal": "normal",
+        "": "normal",
+    }
+    return mapping.get(s, s or "normal")
+
+
+def normalize_direction(value: str) -> str:
+    v = str(value or "").lower().strip()
+    if v in ("long", "up", "bull", "bullish", "buy"):
+        return "long"
+    if v in ("short", "down", "bear", "bearish", "sell"):
+        return "short"
+    return ""
+
+
+def volume_to_bucket(volume: float) -> str:
+    try:
+        v = float(volume or 0)
+    except Exception:
+        v = 0.0
+
+    if v >= 500_000_000:
+        return "ultra"
+    if v >= 100_000_000:
+        return "high"
+    if v >= 10_000_000:
+        return "medium"
+    if v >= 1_000_000:
+        return "low"
+    return "trash"
+
+
+def liquidity_factor(features: dict) -> float:
+    bucket = str(features.get("volume_bucket") or "")
+    if not bucket:
+        bucket = volume_to_bucket(features.get("volume_24h"))
+
+    if bucket == "ultra":
+        return 1.00
+    if bucket == "high":
+        return 0.85
+    if bucket == "medium":
+        return 0.65
+    if bucket == "low":
+        return 0.40
+    if bucket == "trash":
+        return 0.20
+    return 0.50
+
+
+def calc_position_size(balance: float, params: dict, features: dict, setup_type: str) -> float:
+    base_pct = float(params.get("position_size_percent") or 5.0)
+    max_single_pct = float(params.get("max_single_position_percent") or 7.0)
+
+    # База
+    size = balance * base_pct / 100.0
+
+    # Ликвидность
+    liq_factor = liquidity_factor(features)
+    size *= liq_factor
+
+    # Волатильность
+    vol_bucket = str(features.get("volatility_bucket") or "unknown")
+    if vol_bucket == "extreme":
+        size *= 0.60
+    elif vol_bucket == "high":
+        size *= 0.80
+
+    # Тип сетапа
+    st = normalize_setup_type(setup_type)
+    if st == "long_impulse":
+        size *= 0.90
+    elif st == "short_impulse":
+        size *= 1.00
+    elif st == "long_reversal":
+        size *= 0.70
+    elif st == "long_trend":
+        size *= 0.90
+    elif st == "short_trend":
+        size *= 0.95
+
+    # Глобальный жёсткий потолок
+    size = min(size, balance * max_single_pct / 100.0)
+
+    return round(size, 2)
+
+
 def detect_setup_type(features: dict, forecast: dict) -> str:
     """
-    Только маркировка для анализа.
-    На торговое поведение не влияет.
+    Сначала берём setup_type из features_snapshot forecaster'а.
+    Если его нет — fallback на старую эвристику.
     """
+    snapshot = forecast.get("features_snapshot") or {}
+    if isinstance(snapshot, str):
+        try:
+            snapshot = json.loads(snapshot)
+        except Exception:
+            snapshot = {}
+
+    snap_setup = normalize_setup_type(snapshot.get("setup_type"))
+    if snap_setup != "normal":
+        return snap_setup
+
     try:
         prob = float(forecast.get("direction_probability") or 0)
     except Exception:
         prob = 0.0
 
-    direction = str(forecast.get("direction") or "").lower().strip()
+    direction = normalize_direction(forecast.get("direction"))
     regime = str(features.get("regime") or "")
     r_1h = float(features.get("r_1h") or 0)
     rsi = float(features.get("rsi_14") or 50)
     sr_signal = str(features.get("sr_signal") or "")
     volume = float(features.get("volume_24h") or 0)
+    relative_strength = float(features.get("relative_strength") or 0)
+    impulse_score = int(features.get("impulse_score") or 0)
+    reversal_score = int(features.get("reversal_score") or 0)
+    market_mode = str(features.get("market_mode") or "sideways")
 
-    forecast_snapshot = forecast.get("features_snapshot") or {}
-    if isinstance(forecast_snapshot, str):
-        try:
-            forecast_snapshot = json.loads(forecast_snapshot)
-        except Exception:
-            forecast_snapshot = {}
-
-    btc_ctx = forecast_snapshot.get("btc_context") or {}
-    btc_change = float(btc_ctx.get("btc_24h_change") or 0)
-    btc_regime = str(btc_ctx.get("global_regime") or "")
-    btc_structure_4h = str(btc_ctx.get("price_structure_4h") or "")
-
-    if direction == "down":
+    if direction == "short":
         if (
             prob >= 75
-            and regime == "crash"
-            and btc_regime == "bear_market"
-            and btc_structure_4h in ("downtrend", "sideways")
-            and btc_change <= 1.0
-            and r_1h <= 0.05
-            and 40 <= rsi <= 60
-            and sr_signal in ("bounce_resistance", "neutral")
+            and impulse_score >= 3
+            and r_1h <= -0.02
+            and sr_signal in ("bounce_resistance", "breakout_down", "neutral")
+            and relative_strength <= 0.5
             and volume >= 1_000_000
         ):
-            return "impulse_short"
+            return "short_impulse"
 
-    if direction == "up":
+        if market_mode in ("bear", "bear_sideways"):
+            return "short_trend"
+
+    if direction == "long":
         if (
             prob >= 75
-            and regime in ("oversold_crash", "reversal")
-            and r_1h >= 0
-            and btc_change >= -1.0
+            and reversal_score >= 2
+            and (rsi <= 40 or sr_signal == "bounce_support")
             and volume >= 1_000_000
         ):
-            return "impulse_long"
+            return "long_reversal"
+
+        if (
+            prob >= 75
+            and impulse_score >= 3
+            and r_1h >= 0.02
+            and relative_strength >= 1.0
+            and volume >= 1_000_000
+        ):
+            return "long_impulse"
+
+        if market_mode in ("bull", "bull_sideways"):
+            return "long_trend"
 
     return "normal"
+
+
 def detect_market_mode(features: dict, forecast: dict) -> str:
+    feature_mode = str(features.get("market_mode") or "").strip()
+    if feature_mode:
+        return feature_mode
+
     forecast_snapshot = forecast.get("features_snapshot") or {}
     if isinstance(forecast_snapshot, str):
         try:
@@ -91,10 +208,22 @@ def detect_market_mode(features: dict, forecast: dict) -> str:
         except Exception:
             forecast_snapshot = {}
 
+    feature_snapshot_mode = str(forecast_snapshot.get("market_mode") or "").strip()
+    if feature_snapshot_mode:
+        return feature_snapshot_mode
+
     btc_ctx = forecast_snapshot.get("btc_context") or {}
 
-    btc_regime = str(btc_ctx.get("global_regime") or "")
-    btc_structure = str(btc_ctx.get("price_structure_4h") or "")
+    btc_regime = str(
+        forecast_snapshot.get("btc_regime")
+        or btc_ctx.get("global_regime")
+        or ""
+    )
+    btc_structure = str(
+        forecast_snapshot.get("btc_structure_4h")
+        or btc_ctx.get("price_structure_4h")
+        or ""
+    )
 
     if btc_regime == "bear_market":
         if btc_structure == "downtrend":
@@ -118,14 +247,6 @@ def check_entry(
     setup_type: str = "normal",
     market_mode: str = "sideways",
 ) -> tuple[bool, str, str]:
-    """
-    Адаптивный вход под режим рынка:
-    - bear: сильный медвежий рынок
-    - bear_sideways: медвежий рынок, но структура BTC боковая
-    - bull: сильный бычий рынок
-    - bull_sideways: бычий рынок, но структура BTC боковая
-    - sideways: нейтральный режим
-    """
     if not forecast:
         return False, "", "no_data"
 
@@ -134,18 +255,11 @@ def check_entry(
     except Exception:
         prob = 0.0
 
-    fc_direction = str(forecast.get("direction") or "").lower().strip()
-
-    if fc_direction in ("long", "up", "bull", "bullish", "buy"):
-        direction = "long"
-    elif fc_direction in ("short", "down", "bear", "bearish", "sell"):
-        direction = "short"
-    else:
+    direction = normalize_direction(forecast.get("direction"))
+    if not direction:
         return False, "", "neutral_forecast"
 
-    min_prob = 75.0
-    if prob < min_prob:
-        return False, "", f"weak_prob({prob:.1f}<{min_prob})"
+    setup_type = normalize_setup_type(setup_type)
 
     regime = str(features.get("regime") or "")
     r_1h = float(features.get("r_1h") or 0)
@@ -153,129 +267,144 @@ def check_entry(
     rsi = float(features.get("rsi_14") or 50)
     sr_signal = str(features.get("sr_signal") or "")
     volume = float(features.get("volume_24h") or 0)
+    volume_bucket = str(features.get("volume_bucket") or volume_to_bucket(volume))
+    volatility_bucket = str(features.get("volatility_bucket") or "unknown")
+    relative_strength = float(features.get("relative_strength") or 0)
+    impulse_score = int(features.get("impulse_score") or 0)
+    reversal_score = int(features.get("reversal_score") or 0)
+    dist_to_support = features.get("distance_to_support_pct")
+    dist_to_resistance = features.get("distance_to_resistance_pct")
+
+    try:
+        dist_to_support = float(dist_to_support) if dist_to_support is not None else None
+    except Exception:
+        dist_to_support = None
+
+    try:
+        dist_to_resistance = float(dist_to_resistance) if dist_to_resistance is not None else None
+    except Exception:
+        dist_to_resistance = None
+
+    min_prob = float(params.get("min_entry_probability") or 75.0)
+    if prob < min_prob:
+        return False, "", f"weak_prob({prob:.1f}<{min_prob:.1f})"
 
     if volume < 1_000_000:
         return False, "", f"low_volume({volume:.0f})"
 
-    # ---------------- BEAR ----------------
-    if market_mode == "bear":
-        if direction == "long":
-            if regime == "crash":
-                return False, "", "blocked_long_in_crash"
-            if r_1h < 0:
-                return False, "", f"bad_momentum_long({r_1h:.2f})"
-            if rsi > 65:
-                return False, "", f"rsi_high({rsi:.1f})"
-            if r_24h < -0.02 and setup_type != "impulse_long":
-                return False, "", f"bear_mode_long_block({r_24h:.2f})"
-            return True, direction, f"entry_ok_bear_long(prob={prob:.1f})"
+    if volume_bucket == "trash":
+        return False, "", "trash_liquidity"
 
-        if direction == "short":
-            if sr_signal == "bounce_support":
-                return False, "", "short_blocked_bounce_support"
-            if setup_type == "normal" and r_1h > -0.02:
-                return False, "", f"weak_momentum_short({r_1h:.2f})"
-            if r_1h > 0.02:
-                return False, "", f"bounce_up_short_block({r_1h:.2f})"
-            if r_24h > 0:
-                return False, "", f"bad_higher_tf_short({r_24h:.2f})"
-            if rsi < 35:
-                return False, "", f"rsi_low({rsi:.1f})"
-            if setup_type == "normal" and rsi >= 65:
-                return False, "", f"short_rsi_too_high({rsi:.1f})"
-            return True, direction, f"entry_ok_bear_short(prob={prob:.1f})"
+    # Слишком экстремальная среда — только для импульсов
+    if volatility_bucket == "extreme" and setup_type not in ("short_impulse", "long_impulse"):
+        return False, "", "extreme_volatility_non_impulse"
 
-    # ------------ BEAR SIDEWAYS ------------
-    elif market_mode == "bear_sideways":
-        if direction == "long":
-            if regime == "crash":
-                return False, "", "blocked_long_in_crash"
-            if r_1h < 0:
-                return False, "", f"bad_momentum_long({r_1h:.2f})"
-            if r_24h < -0.03:
-                return False, "", f"bear_sideways_long_block({r_24h:.2f})"
-            if rsi > 62:
-                return False, "", f"rsi_high({rsi:.1f})"
-            return True, direction, f"entry_ok_bear_sideways_long(prob={prob:.1f})"
+    # ---------------- LONG IMPULSE ----------------
+    if setup_type == "long_impulse":
+        if direction != "long":
+            return False, "", "setup_dir_mismatch"
+        if impulse_score < 3:
+            return False, "", f"weak_impulse_score({impulse_score})"
+        if r_1h < 0.02:
+            return False, "", f"weak_long_impulse_momentum({r_1h:.3f})"
+        if relative_strength < 1.0:
+            return False, "", f"weak_relative_strength({relative_strength:.2f})"
+        if sr_signal == "bounce_resistance":
+            return False, "", "long_impulse_blocked_resistance"
+        if rsi >= 78:
+            return False, "", f"long_impulse_rsi_too_high({rsi:.1f})"
+        return True, "long", f"entry_ok_long_impulse(prob={prob:.1f})"
 
-        if direction == "short":
-            if sr_signal == "bounce_support":
-                return False, "", "short_blocked_bounce_support"
-            if r_1h > 0.01:
-                return False, "", f"bear_sideways_bad_short_momentum({r_1h:.2f})"
-            if r_24h > 0.02:
-                return False, "", f"bear_sideways_bad_higher_tf_short({r_24h:.2f})"
-            if rsi < 38:
-                return False, "", f"bear_sideways_short_rsi_low({rsi:.1f})"
-            if rsi >= 68:
-                return False, "", f"bear_sideways_short_rsi_high({rsi:.1f})"
-            return True, direction, f"entry_ok_bear_sideways_short(prob={prob:.1f})"
+    # ---------------- LONG REVERSAL ----------------
+    if setup_type == "long_reversal":
+        if direction != "long":
+            return False, "", "setup_dir_mismatch"
+        if reversal_score < 2:
+            return False, "", f"weak_reversal_score({reversal_score})"
+        if rsi > 45:
+            return False, "", f"long_reversal_rsi_too_high({rsi:.1f})"
+        if r_1h < -0.01:
+            return False, "", f"long_reversal_bad_momentum({r_1h:.3f})"
+        if sr_signal not in ("bounce_support", "neutral", "breakout_up"):
+            return False, "", f"bad_sr_for_long_reversal({sr_signal})"
+        if dist_to_support is not None and dist_to_support > 2.0 and sr_signal == "bounce_support":
+            return False, "", f"too_far_from_support({dist_to_support:.2f})"
+        return True, "long", f"entry_ok_long_reversal(prob={prob:.1f})"
 
-    # ---------------- BULL ----------------
-    elif market_mode == "bull":
-        if direction == "short":
-            if setup_type != "impulse_short":
-                return False, "", "short_blocked_in_bull"
-            if sr_signal != "bounce_resistance":
-                return False, "", "short_needs_resistance_in_bull"
-            if r_1h < 0:
-                return False, "", f"late_short_in_bull({r_1h:.2f})"
-            if rsi < 60:
-                return False, "", f"short_rsi_not_hot_enough({rsi:.1f})"
-            return True, direction, f"entry_ok_bull_short(prob={prob:.1f})"
+    # ---------------- LONG TREND ----------------
+    if setup_type == "long_trend":
+        if direction != "long":
+            return False, "", "setup_dir_mismatch"
+        if market_mode not in ("bull", "bull_sideways", "sideways"):
+            return False, "", f"bad_market_mode_for_long_trend({market_mode})"
+        if r_1h < -0.01:
+            return False, "", f"long_trend_bad_1h({r_1h:.3f})"
+        if r_24h < -0.02:
+            return False, "", f"long_trend_bad_24h({r_24h:.3f})"
+        if sr_signal == "bounce_resistance":
+            return False, "", "long_trend_resistance_block"
+        if relative_strength < -0.5:
+            return False, "", f"long_trend_weak_relative_strength({relative_strength:.2f})"
+        if rsi < 40 or rsi > 76:
+            return False, "", f"long_trend_rsi_bad({rsi:.1f})"
+        return True, "long", f"entry_ok_long_trend(prob={prob:.1f})"
 
-        if direction == "long":
-            if r_1h < 0:
-                return False, "", f"weak_momentum_long({r_1h:.2f})"
-            if r_24h < 0:
-                return False, "", f"bad_higher_tf_long({r_24h:.2f})"
-            if sr_signal == "bounce_resistance":
-                return False, "", "long_blocked_bounce_resistance"
-            if rsi < 40:
-                return False, "", f"long_rsi_too_low({rsi:.1f})"
-            if rsi > 75:
-                return False, "", f"long_rsi_too_high({rsi:.1f})"
-            return True, direction, f"entry_ok_bull_long(prob={prob:.1f})"
+    # ---------------- SHORT IMPULSE ----------------
+    if setup_type == "short_impulse":
+        if direction != "short":
+            return False, "", "setup_dir_mismatch"
+        if impulse_score < 3:
+            return False, "", f"weak_impulse_score({impulse_score})"
+        if r_1h > -0.02:
+            return False, "", f"weak_short_impulse_momentum({r_1h:.3f})"
+        if sr_signal == "bounce_support":
+            return False, "", "short_impulse_blocked_support"
+        if relative_strength > 1.0:
+            return False, "", f"short_impulse_too_strong_asset({relative_strength:.2f})"
+        if rsi < 32:
+            return False, "", f"short_impulse_rsi_too_low({rsi:.1f})"
+        return True, "short", f"entry_ok_short_impulse(prob={prob:.1f})"
 
-    # ------------ BULL SIDEWAYS ------------
-    elif market_mode == "bull_sideways":
-        if direction == "short":
-            if setup_type != "impulse_short":
-                return False, "", "short_blocked_in_bull_sideways"
-            if sr_signal != "bounce_resistance":
-                return False, "", "short_needs_resistance_in_bull_sideways"
-            if rsi < 62:
-                return False, "", f"bull_sideways_short_rsi_low({rsi:.1f})"
-            return True, direction, f"entry_ok_bull_sideways_short(prob={prob:.1f})"
+    # ---------------- SHORT TREND ----------------
+    if setup_type == "short_trend":
+        if direction != "short":
+            return False, "", "setup_dir_mismatch"
+        if market_mode not in ("bear", "bear_sideways", "sideways"):
+            return False, "", f"bad_market_mode_for_short_trend({market_mode})"
+        if sr_signal == "bounce_support":
+            return False, "", "short_trend_support_block"
+        if r_1h > 0.01:
+            return False, "", f"short_trend_bad_1h({r_1h:.3f})"
+        if r_24h > 0.03:
+            return False, "", f"short_trend_bad_24h({r_24h:.3f})"
+        if relative_strength > 1.0:
+            return False, "", f"short_trend_too_strong_asset({relative_strength:.2f})"
+        if rsi < 34:
+            return False, "", f"short_trend_rsi_too_low({rsi:.1f})"
+        if market_mode == "bull":
+            return False, "", "short_trend_blocked_in_bull"
+        return True, "short", f"entry_ok_short_trend(prob={prob:.1f})"
 
-        if direction == "long":
-            if r_1h < -0.01:
-                return False, "", f"bull_sideways_bad_long_momentum({r_1h:.2f})"
-            if r_24h < -0.01:
-                return False, "", f"bull_sideways_bad_higher_tf_long({r_24h:.2f})"
-            if sr_signal == "bounce_resistance":
-                return False, "", "bull_sideways_long_blocked_resistance"
-            if rsi < 42:
-                return False, "", f"bull_sideways_long_rsi_low({rsi:.1f})"
-            if rsi > 72:
-                return False, "", f"bull_sideways_long_rsi_high({rsi:.1f})"
-            return True, direction, f"entry_ok_bull_sideways_long(prob={prob:.1f})"
+    # ---------------- FALLBACK NORMAL ----------------
+    if direction == "long":
+        if market_mode == "bear" and regime == "crash":
+            return False, "", "blocked_long_in_crash"
+        if r_1h < -0.01:
+            return False, "", f"normal_long_bad_momentum({r_1h:.3f})"
+        if sr_signal == "bounce_resistance":
+            return False, "", "normal_long_resistance_block"
+        if rsi > 72:
+            return False, "", f"normal_long_rsi_high({rsi:.1f})"
+        return True, "long", f"entry_ok_normal_long(prob={prob:.1f})"
 
-    # --------------- SIDEWAYS ---------------
-    else:
-        if direction == "long":
-            if r_1h < -0.01:
-                return False, "", f"sideways_bad_long_momentum({r_1h:.2f})"
-            if rsi > 70:
-                return False, "", f"sideways_long_rsi_high({rsi:.1f})"
-            return True, direction, f"entry_ok_sideways_long(prob={prob:.1f})"
-
-        if direction == "short":
-            if r_1h > 0.01:
-                return False, "", f"sideways_bad_short_momentum({r_1h:.2f})"
-            if rsi < 35:
-                return False, "", f"sideways_short_rsi_low({rsi:.1f})"
-            return True, direction, f"entry_ok_sideways_short(prob={prob:.1f})"
+    if direction == "short":
+        if sr_signal == "bounce_support":
+            return False, "", "normal_short_support_block"
+        if r_1h > 0.01:
+            return False, "", f"normal_short_bad_momentum({r_1h:.3f})"
+        if rsi < 35:
+            return False, "", f"normal_short_rsi_low({rsi:.1f})"
+        return True, "short", f"entry_ok_normal_short(prob={prob:.1f})"
 
     return False, "", "no_rule_match"
 
@@ -296,7 +425,7 @@ async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool
     )
 
     if last_closed:
-        if last_closed["close_reason"] and "stop_loss" in last_closed["close_reason"]:
+        if last_closed["close_reason"] and "stop_loss" in str(last_closed["close_reason"]):
             if prob < 56:
                 return False, f"post_sl_weak({prob:.0f}%<56%)"
 
@@ -352,7 +481,6 @@ async def get_price(symbol: str) -> float | None:
 
 async def get_sl_price(symbol: str, price: float, direction: str) -> tuple[float, float]:
     sl_pct = 15.0
-
     if direction == "short":
         return price * (1 + sl_pct / 100), sl_pct
     return price * (1 - sl_pct / 100), sl_pct
@@ -363,19 +491,31 @@ async def get_atr_sl(symbol: str, price: float) -> float:
     return sl_pct
 
 
-async def open_trade(account, symbol, direction, price, params, forecast, features, sr_data=None, setup_type="normal"):
+async def open_trade(
+    account,
+    symbol,
+    direction,
+    price,
+    params,
+    forecast,
+    features,
+    sr_data=None,
+    setup_type="normal",
+    sl_price_override=None,
+):
     if not price or price <= 0:
         logger.warning(f"Invalid price {symbol}: {price}")
         return None
 
     balance = float(account["current_balance"])
-    size = balance * float(params.get("position_size_percent") or 5) / 100
-    size = min(size, balance * 0.10)
+    size = calc_position_size(balance, params, features, setup_type)
     if size < 10:
+        logger.info(f"SKIP {symbol}: position too small after liquidity sizing (${size:.2f})")
         return None
 
     crypto = size / price
-    sl_price, sl_pct = await get_sl_price(symbol, price, direction)
+    default_sl_price, sl_pct = await get_sl_price(symbol, price, direction)
+    sl_price = float(sl_price_override) if sl_price_override and sl_price_override > 0 else default_sl_price
     tp1 = float(params.get("tp1_percent") or 2.0)
 
     entry_features = forecast.get("features_snapshot") or {}
@@ -393,6 +533,14 @@ async def open_trade(account, symbol, direction, price, params, forecast, featur
             "r_24h": features.get("r_24h"),
             "volume_24h": features.get("volume_24h"),
             "sr_signal": features.get("sr_signal"),
+            "btc_regime": features.get("btc_regime"),
+            "btc_structure_4h": features.get("btc_structure_4h"),
+            "market_mode": features.get("market_mode"),
+            "relative_strength": features.get("relative_strength"),
+            "volume_bucket": features.get("volume_bucket"),
+            "volatility_bucket": features.get("volatility_bucket"),
+            "impulse_score": features.get("impulse_score"),
+            "reversal_score": features.get("reversal_score"),
             "btc_context": {
                 "global_regime": features.get("btc_regime"),
                 "price_structure_4h": features.get("btc_structure_4h"),
@@ -414,7 +562,7 @@ async def open_trade(account, symbol, direction, price, params, forecast, featur
         forecast.get("direction"),
         forecast.get("direction_probability"),
         json.dumps(entry_features),
-        setup_type
+        normalize_setup_type(setup_type)
     )
     if not row:
         return None
@@ -441,14 +589,18 @@ async def open_trade(account, symbol, direction, price, params, forecast, featur
     reason_text = (
         f"\n\n📊 <b>Причина входа:</b>\n"
         f"🎯 Вероятность: {float(forecast.get('direction_probability') or 0):.1f}%\n"
-        f"🧠 Сетап: {setup_type}\n"
+        f"🧠 Сетап: {normalize_setup_type(setup_type)}\n"
         f"📉 Тренд: {entry_features.get('regime', '-')}\n"
         f"📊 RSI: {float(entry_features.get('rsi_14') or 0):.1f}\n"
         f"⚡ Импульс 1ч: {float(entry_features.get('r_1h') or 0):.3f}\n"
         f"🌊 Импульс 24ч: {float(entry_features.get('r_24h') or 0):.3f}\n"
         f"💰 Объем: {float(entry_features.get('volume_24h') or 0) / 1_000_000:.1f}M\n"
         f"🧱 SR сигнал: {entry_features.get('sr_signal', '-')}\n"
-        f"₿ BTC: {btc_ctx.get('global_regime', '-')} / {btc_ctx.get('price_structure_4h', '-')}"
+        f"📦 Liquidity bucket: {entry_features.get('volume_bucket', '-')}\n"
+        f"⚠️ Volatility bucket: {entry_features.get('volatility_bucket', '-')}\n"
+        f"💪 Relative strength: {float(entry_features.get('relative_strength') or 0):.2f}\n"
+        f"₿ BTC: {btc_ctx.get('global_regime', entry_features.get('btc_regime', '-'))} / "
+        f"{btc_ctx.get('price_structure_4h', entry_features.get('btc_structure_4h', '-'))}"
     )
 
     await tg.send(
@@ -493,41 +645,29 @@ async def check_exit(trade, price, params):
             return True, "stop_loss", 100
 
     sr_features = await db.fetchrow(
-        "SELECT support_1, resistance_1 FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
+        """SELECT support_1, resistance_1, r_24h, atr, price, market_mode
+           FROM crypto_features_hourly
+           WHERE symbol=$1 ORDER BY ts DESC LIMIT 1""",
         trade["symbol"]
     )
 
-    dist_to_sr_pct = None
     latest_r_24h = None
+    latest_market_mode = "sideways"
 
-    if sr_features:
-        if direction == "long" and sr_features["support_1"]:
-            support_1 = float(sr_features["support_1"])
-            if entry > 0:
-                dist_to_sr_pct = abs(entry - support_1) / entry * 100
-
-        elif direction == "short" and sr_features["resistance_1"]:
-            resistance_1 = float(sr_features["resistance_1"])
-            if entry > 0:
-                dist_to_sr_pct = abs(entry - resistance_1) / entry * 100
-
-    latest_features = await db.fetchrow(
-        "SELECT r_24h FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
-        trade["symbol"]
-    )
-    if latest_features and latest_features["r_24h"] is not None:
-        latest_r_24h = float(latest_features["r_24h"])
+    if sr_features and sr_features["r_24h"] is not None:
+        latest_r_24h = float(sr_features["r_24h"])
+    if sr_features and sr_features["market_mode"]:
+        latest_market_mode = str(sr_features["market_mode"])
 
     latest_fc = await get_latest_forecast(trade["symbol"], "4h")
     if latest_fc:
-        fc_dir = str(latest_fc.get("direction") or "").lower().strip()
+        fc_dir = normalize_direction(latest_fc.get("direction"))
         fc_prob = float(latest_fc.get("direction_probability") or 0)
 
-        # Выход только при реально сильном противоположном прогнозе
-        if direction == "long" and fc_dir == "down" and fc_prob >= 80:
+        if direction == "long" and fc_dir == "short" and fc_prob >= 80:
             return True, f"opposite_forecast_exit({fc_prob:.1f})", 100
 
-        if direction == "short" and fc_dir == "up" and fc_prob >= 80:
+        if direction == "short" and fc_dir == "long" and fc_prob >= 80:
             return True, f"opposite_forecast_exit({fc_prob:.1f})", 100
 
     if has_tp1 and params.get("be_stop_after_tp1", True) and pnl_pct <= fee_pct:
@@ -548,14 +688,9 @@ async def check_exit(trade, price, params):
 
     trail_start = float(params.get("trail_start_percent") or 2.5)
     if peak_pct >= trail_start:
-        atr_row = await db.fetchrow(
-            "SELECT atr, price FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
-            trade["symbol"]
-        )
-
         offset = 1.8
-        if atr_row and atr_row["atr"] and atr_row["price"]:
-            atr_pct = float(atr_row["atr"]) / float(atr_row["price"]) * 100
+        if sr_features and sr_features["atr"] and sr_features["price"]:
+            atr_pct = float(sr_features["atr"]) / float(sr_features["price"]) * 100
             offset = max(
                 1.2,
                 min(4.5, atr_pct * float(params.get("runner_trail_atr_mult") or 1.8))
@@ -571,6 +706,13 @@ async def check_exit(trade, price, params):
 
     if peak_pct >= 5.0 and not has_tp1 and pnl_pct <= peak_pct - 2.5:
         return True, "peak_protection", 100
+
+    # мягкий защитный выход при развороте higher timeframe
+    if latest_r_24h is not None:
+        if direction == "long" and latest_r_24h < -5 and pnl_pct > 0:
+            return True, "htf_momentum_flip", 100
+        if direction == "short" and latest_r_24h > 5 and pnl_pct > 0:
+            return True, "htf_momentum_flip", 100
 
     return False, "", 0
 
@@ -825,10 +967,15 @@ async def trading_cycle():
             if len(sector_trades) >= int(params.get("max_positions_high_corr") or 3):
                 continue
 
+            # Считаем размер с учётом ликвидности
+            planned_size = calc_position_size(balance, params, features, setup_type)
+            if planned_size < 10:
+                logger.info(f"SKIP {symbol}: planned size too small (${planned_size:.2f})")
+                continue
+
             exposure = sum(float(t["amount_usdt"]) for t in open_trades)
-            size = balance * float(params.get("position_size_percent") or 5) / 100
             max_exp = balance * float(params.get("max_total_exposure") or 25) / 100
-            if exposure + size > max_exp:
+            if exposure + planned_size > max_exp:
                 logger.info("Cycle stopped: max exposure reached")
                 break
 
@@ -837,6 +984,7 @@ async def trading_cycle():
                 continue
 
             sr_data = None
+            sr_sl_price = None
             try:
                 sr_data = await analyze_sr(sr_session, symbol)
                 if sr_data:
@@ -844,19 +992,31 @@ async def trading_cycle():
             except Exception as e:
                 logger.debug(f"SR analysis error {symbol}: {e}")
 
-            sr_ok, sl_price, sr_reason = get_sr_entry_signal(sr_data, direction)
+            sr_ok, sr_sl_price, sr_reason = get_sr_entry_signal(sr_data, direction)
             if sr_data and not sr_ok:
                 logger.info(f"SR blocked {symbol} {direction}: {sr_reason}")
                 continue
 
-            logger.info(f"SETUP {symbol}: mode={market_mode} setup={setup_type}")
+            logger.info(f"SETUP {symbol}: mode={market_mode} setup={setup_type} reason={reason}")
 
-            trade = await open_trade(account, symbol, direction, price, params, forecast, features, sr_data, setup_type)
+            trade = await open_trade(
+                account,
+                symbol,
+                direction,
+                price,
+                params,
+                forecast,
+                features,
+                sr_data,
+                setup_type,
+                sr_sl_price,
+            )
             if trade:
                 new_trades += 1
                 open_trades.append(trade)
                 open_syms.add(symbol)
                 account = await get_account()
+                balance = float(account["current_balance"])
 
     logger.info(f"Cycle finished: opened {new_trades} new trades")
 

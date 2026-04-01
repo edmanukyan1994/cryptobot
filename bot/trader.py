@@ -169,8 +169,9 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
         ):
             return "short_impulse"
 
-        if market_mode in ("bear", "bear_sideways"):
+        if market_mode == "bear":
             return "short_trend"
+        # bear_sideways → short_trend заблокируется в check_entry, поэтому сразу normal
 
     if direction == "long":
         if (

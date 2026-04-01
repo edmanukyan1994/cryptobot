@@ -285,9 +285,21 @@ def check_entry(
     except Exception:
         dist_to_resistance = None
 
-    min_prob = float(params.get("min_entry_probability") or 75.0)
+    if setup_type == "long_reversal":
+        min_prob = float(params.get("min_prob_long_reversal") or 62.0)
+    elif setup_type == "long_impulse":
+        min_prob = float(params.get("min_prob_long_impulse") or 68.0)
+    elif setup_type == "long_trend":
+        min_prob = float(params.get("min_prob_long_trend") or 72.0)
+    elif setup_type == "short_impulse":
+        min_prob = float(params.get("min_prob_short_impulse") or 70.0)
+    elif setup_type == "short_trend":
+        min_prob = float(params.get("min_prob_short_trend") or 75.0)
+    else:
+        min_prob = float(params.get("min_entry_probability") or 75.0)
+
     if prob < min_prob:
-        return False, "", f"weak_prob({prob:.1f}<{min_prob:.1f})"
+        return False, "", f"weak_prob({prob:.1f}<{min_prob:.1f},{setup_type})"
 
     if volume < 1_000_000:
         return False, "", f"low_volume({volume:.0f})"

@@ -493,7 +493,31 @@ async def get_price(symbol: str) -> float | None:
 
 
 async def get_sl_price(symbol: str, price: float, direction: str) -> tuple[float, float]:
-    sl_pct = 15.0
+    MAX_SL_PCT = 15.0
+    SR_BUFFER = 0.005
+
+    try:
+        f_row = await db.fetchrow(
+            "SELECT support_1, resistance_1 FROM crypto_features_hourly WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
+            symbol
+        )
+        if f_row:
+            if direction == "short" and f_row["resistance_1"]:
+                res = float(f_row["resistance_1"])
+                sl_price = res * (1 + SR_BUFFER)
+                sl_pct = (sl_price - price) / price * 100
+                if 0.5 <= sl_pct <= MAX_SL_PCT:
+                    return sl_price, round(sl_pct, 2)
+            elif direction == "long" and f_row["support_1"]:
+                sup = float(f_row["support_1"])
+                sl_price = sup * (1 - SR_BUFFER)
+                sl_pct = (price - sl_price) / price * 100
+                if 0.5 <= sl_pct <= MAX_SL_PCT:
+                    return sl_price, round(sl_pct, 2)
+    except Exception:
+        pass
+
+    sl_pct = MAX_SL_PCT
     if direction == "short":
         return price * (1 + sl_pct / 100), sl_pct
     return price * (1 - sl_pct / 100), sl_pct
@@ -722,9 +746,9 @@ async def check_exit(trade, price, params):
 
     # мягкий защитный выход при развороте higher timeframe
     if latest_r_24h is not None:
-        if direction == "long" and latest_r_24h < -5 and pnl_pct > 0:
+        if direction == "long" and latest_r_24h < -5 and pnl_pct > -2:
             return True, "htf_momentum_flip", 100
-        if direction == "short" and latest_r_24h > 5 and pnl_pct > 0:
+        if direction == "short" and latest_r_24h > 5 and pnl_pct > -2:
             return True, "htf_momentum_flip", 100
 
     return False, "", 0

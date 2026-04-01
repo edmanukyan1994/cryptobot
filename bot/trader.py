@@ -240,6 +240,50 @@ def detect_market_mode(features: dict, forecast: dict) -> str:
 
     return "sideways"
 
+def btc_move_allows_entry(
+    setup_type: str,
+    market_mode: str,
+    btc_momentum: str,
+    prob: float,
+    relative_strength: float
+) -> tuple[bool, str]:
+
+    st = normalize_setup_type(setup_type)
+    btc_mom = str(btc_momentum or "").lower()
+
+    # ---------------- LONG REVERSAL ----------------
+    if st == "long_reversal":
+        if btc_mom == "strong_down":
+            return False, "btc_strong_down_block"
+        if btc_mom == "weak_down" and (prob < 68 or relative_strength < 0):
+            return False, "btc_weak_down_filter"
+
+    # ---------------- LONG IMPULSE ----------------
+    elif st == "long_impulse":
+        if btc_mom == "strong_down":
+            return False, "btc_strong_down_block"
+        if btc_mom == "weak_down" and (prob < 72 or relative_strength < 1.0):
+            return False, "btc_weak_down_filter"
+
+    # ---------------- LONG TREND ----------------
+    elif st == "long_trend":
+        if btc_mom in ("strong_down", "weak_down"):
+            return False, "btc_down_block_trend"
+
+    # ---------------- SHORT TREND ----------------
+    elif st == "short_trend":
+        if btc_mom in ("strong_up", "weak_up"):
+            return False, "btc_up_block_short_trend"
+
+    # ---------------- SHORT IMPULSE ----------------
+    elif st == "short_impulse":
+        if btc_mom == "strong_up":
+            return False, "btc_strong_up_block"
+        if btc_mom == "weak_up" and (prob < 80 or relative_strength > 0):
+            return False, "btc_weak_up_filter"
+
+    return True, "ok"
+
 
 def check_entry(
     features: dict,
@@ -1001,6 +1045,31 @@ async def trading_cycle():
             if not should:
                 if reason not in ("neutral_forecast", "no_data"):
                     logger.info(f"SKIP {symbol}: {reason}")
+                continue
+
+            forecast_snapshot = forecast.get("features_snapshot") or {}
+            if isinstance(forecast_snapshot, str):
+                try:
+                    forecast_snapshot = json.loads(forecast_snapshot)
+                except Exception:
+                    forecast_snapshot = {}
+
+            btc_momentum = (
+                features.get("btc_momentum")
+                or forecast_snapshot.get("btc_momentum")
+                or "flat"
+            )
+
+            btc_ok, btc_reason = btc_move_allows_entry(
+                setup_type,
+                market_mode,
+                btc_momentum,
+                float(forecast.get("direction_probability") or 0),
+                float(features.get("relative_strength") or 0)
+            )
+
+            if not btc_ok:
+                logger.info(f"BLOCKED {symbol}: {btc_reason}")
                 continue
 
             if allowed == "long_only" and direction != "long":

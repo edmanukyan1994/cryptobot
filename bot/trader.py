@@ -342,7 +342,9 @@ def check_entry(
             return False, "", f"bad_sr_for_long_reversal({sr_signal})"
         if dist_to_support is not None and dist_to_support > 2.0 and sr_signal == "bounce_support":
             return False, "", f"too_far_from_support({dist_to_support:.2f})"
-        return True, "long", f"entry_ok_long_reversal(prob={prob:.1f})"
+        if relative_strength < -0.75:
+            return False, "", f"long_reversal_asset_too_weak({relative_strength:.2f})"
+        return True, "long", f"entry_ok_long_reversal(prob={prob:.1f})"    
 
     # ---------------- LONG TREND ----------------
     if setup_type == "long_trend":
@@ -366,6 +368,20 @@ def check_entry(
     if setup_type == "short_impulse":
         if direction != "short":
             return False, "", "setup_dir_mismatch"
+
+        if market_mode not in ("bear", "bear_sideways"):
+            return False, "", f"bad_market_mode_for_short_impulse({market_mode})"
+
+        if market_mode == "bear_sideways":
+            if r_1h > -0.04:
+                return False, "", f"weak_short_impulse_bear_sideways({r_1h:.3f})"
+            if relative_strength > 0:
+                return False, "", f"short_impulse_asset_not_weak_enough({relative_strength:.2f})"
+            if sr_signal != "bounce_resistance":
+                return False, "", f"short_impulse_needs_resistance({sr_signal})"
+            if prob < float(params.get('min_prob_short_impulse_bear_sideways') or 78.0):
+                return False, "", f"weak_prob_bear_sideways({prob:.1f}<78.0)"
+
         if impulse_score < 3:
             return False, "", f"weak_impulse_score({impulse_score})"
         if r_1h > -0.02:
@@ -376,6 +392,7 @@ def check_entry(
             return False, "", f"short_impulse_too_strong_asset({relative_strength:.2f})"
         if rsi < 32:
             return False, "", f"short_impulse_rsi_too_low({rsi:.1f})"
+
         return True, "short", f"entry_ok_short_impulse(prob={prob:.1f})"
 
     # ---------------- SHORT TREND ----------------

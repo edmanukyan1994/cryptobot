@@ -381,8 +381,10 @@ def check_entry(
     if setup_type == "short_trend":
         if direction != "short":
             return False, "", "setup_dir_mismatch"
-        if market_mode not in ("bear", "bear_sideways", "sideways"):
+
+        if market_mode != "bear":
             return False, "", f"bad_market_mode_for_short_trend({market_mode})"
+
         if sr_signal == "bounce_support":
             return False, "", "short_trend_support_block"
         if r_1h > 0.01:
@@ -393,8 +395,7 @@ def check_entry(
             return False, "", f"short_trend_too_strong_asset({relative_strength:.2f})"
         if rsi < 34:
             return False, "", f"short_trend_rsi_too_low({rsi:.1f})"
-        if market_mode == "bull":
-            return False, "", "short_trend_blocked_in_bull"
+
         return True, "short", f"entry_ok_short_trend(prob={prob:.1f})"
 
     # ---------------- FALLBACK NORMAL ----------------

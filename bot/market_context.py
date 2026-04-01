@@ -132,14 +132,17 @@ def detect_market_mode(global_regime: str, price_structure_4h: str) -> str:
     if global_regime in ("bear_market", "mild_bear"):
         if price_structure_4h == "downtrend":
             return "bear"
-        if price_structure_4h == "sideways":
-            return "bear_sideways"
+        # uptrend внутри медвежьего рынка = локальный отскок, всё равно bear_sideways
+        return "bear_sideways"
 
     if global_regime in ("bull_market", "mild_bull"):
         if price_structure_4h == "uptrend":
             return "bull"
-        if price_structure_4h == "sideways":
-            return "bull_sideways"
+        # downtrend внутри бычьего рынка = локальная коррекция, всё равно bull_sideways
+        return "bull_sideways"
+
+    if global_regime == "crash":
+        return "bear"
 
     return "sideways"
 

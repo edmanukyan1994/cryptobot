@@ -253,10 +253,8 @@ def btc_move_allows_entry(
 
     # ---------------- LONG REVERSAL ----------------
     if st == "long_reversal":
-        if btc_mom == "strong_down":
-            return False, "btc_strong_down_block"
-        if btc_mom == "weak_down" and (prob < 68 or relative_strength < 0):
-            return False, "btc_weak_down_filter"
+        if btc_mom in ("strong_down", "weak_down", "flat"):
+            return False, f"btc_momentum_block_long_reversal({btc_mom})"
 
     # ---------------- LONG IMPULSE ----------------
     elif st == "long_impulse":
@@ -376,18 +374,24 @@ def check_entry(
     if setup_type == "long_reversal":
         if direction != "long":
             return False, "", "setup_dir_mismatch"
+
+        # В медвежьей среде long_reversal слишком часто ловит ножи
+        if market_mode in ("bear", "bear_sideways"):
+            return False, "", f"blocked_long_reversal_in_{market_mode}"
+
         if reversal_score < 2:
             return False, "", f"weak_reversal_score({reversal_score})"
-        if rsi > 45:
+        if rsi > 42:
             return False, "", f"long_reversal_rsi_too_high({rsi:.1f})"
-        if r_1h < -0.01:
-            return False, "", f"long_reversal_bad_momentum({r_1h:.3f})"
-        if sr_signal not in ("bounce_support", "neutral", "breakout_up"):
+        if r_1h <= 0:
+            return False, "", f"no_reversal_momentum({r_1h:.3f})"
+        if sr_signal not in ("bounce_support", "breakout_up"):
             return False, "", f"bad_sr_for_long_reversal({sr_signal})"
-        if dist_to_support is not None and dist_to_support > 2.0 and sr_signal == "bounce_support":
+        if dist_to_support is not None and dist_to_support > 1.2 and sr_signal == "bounce_support":
             return False, "", f"too_far_from_support({dist_to_support:.2f})"
-        if relative_strength < -0.75:
+        if relative_strength < -0.30:
             return False, "", f"long_reversal_asset_too_weak({relative_strength:.2f})"
+
         return True, "long", f"entry_ok_long_reversal(prob={prob:.1f})"    
 
     # ---------------- LONG TREND ----------------

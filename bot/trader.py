@@ -117,14 +117,10 @@ def calc_position_size(
     if st == "long_impulse":
         size *= 0.90
     elif st == "short_impulse":
-        if btc_mom == "strong_down":
-            return True, "btc_strong_down_boost"
         size *= 1.00
     elif st == "long_trend":
         size *= 0.90
     elif st == "short_trend":
-        if btc_mom == "strong_down":
-            return True, "btc_strong_down_boost"
         size *= 0.95
     elif st == "normal":
         size *= 0.80
@@ -271,31 +267,36 @@ def btc_move_allows_entry(
     if st == "long_reversal":
         return False, "long_reversal_disabled_temp"
 
-    elif st == "long_impulse":
+    if st == "long_impulse":
         if btc_mom == "strong_down":
             return False, "btc_strong_down_block"
         if btc_mom == "weak_down" and (prob < 72 or relative_strength < 1.0):
             return False, "btc_weak_down_filter"
+        return True, "ok"
 
-    elif st == "long_trend":
+    if st == "long_trend":
         if btc_mom in ("strong_down", "weak_down"):
             return False, "btc_down_block_trend"
+        return True, "ok"
 
-    elif st == "short_trend":
+    if st == "short_trend":
         if btc_mom == "strong_down":
             return True, "btc_strong_down_boost"
         if btc_mom in ("strong_up", "weak_up"):
             return False, "btc_up_block_short_trend"
+        return True, "ok"
 
-    elif st == "short_impulse":
+    if st == "short_impulse":
         if btc_mom == "strong_down":
             return True, "btc_strong_down_boost"
         if btc_mom == "strong_up":
             return False, "btc_strong_up_block"
         if btc_mom == "weak_up" and (prob < 80 or relative_strength > 0):
             return False, "btc_weak_up_filter"
+        return True, "ok"
 
     return True, "ok"
+
 
 
 def check_entry(

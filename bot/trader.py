@@ -89,11 +89,16 @@ def liquidity_factor(features: dict) -> float:
     return 0.50
 
 
-def calc_position_size(balance: float, params: dict, features: dict, setup_type: str) -> float:
+def calc_position_size(
+    balance: float,
+    params: dict,
+    features: dict,
+    setup_type: str,
+    forecast_probability: float = 0.0,
+) -> float:
     base_pct = float(params.get("position_size_percent") or 5.0)
     max_single_pct = float(params.get("max_single_position_percent") or 7.0)
 
-    # База
     size = balance * base_pct / 100.0
 
     # Ликвидность
@@ -113,14 +118,25 @@ def calc_position_size(balance: float, params: dict, features: dict, setup_type:
         size *= 0.90
     elif st == "short_impulse":
         size *= 1.00
-    elif st == "long_reversal":
-        size *= 0.70
     elif st == "long_trend":
         size *= 0.90
     elif st == "short_trend":
         size *= 0.95
+    elif st == "normal":
+        size *= 0.80
 
-    # Глобальный жёсткий потолок
+    # Probability теперь влияет только на размер, а не на сам факт входа
+    prob = float(forecast_probability or 0)
+
+    if prob >= 80:
+        size *= 1.15
+    elif prob >= 70:
+        size *= 1.00
+    elif prob >= 60:
+        size *= 0.85
+    else:
+        size *= 0.70
+
     size = min(size, balance * max_single_pct / 100.0)
 
     return round(size, 2)
@@ -142,13 +158,7 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
     if snap_setup != "normal":
         return snap_setup
 
-    try:
-        prob = float(forecast.get("direction_probability") or 0)
-    except Exception:
-        prob = 0.0
-
     direction = normalize_direction(forecast.get("direction"))
-    regime = str(features.get("regime") or "")
     r_1h = float(features.get("r_1h") or 0)
     rsi = float(features.get("rsi_14") or 50)
     sr_signal = str(features.get("sr_signal") or "")
@@ -160,8 +170,7 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
 
     if direction == "short":
         if (
-            prob >= 75
-            and impulse_score >= 3
+            impulse_score >= 3
             and r_1h <= -0.02
             and sr_signal in ("bounce_resistance", "breakout_down", "neutral")
             and relative_strength <= 0.5
@@ -171,20 +180,17 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
 
         if market_mode == "bear":
             return "short_trend"
-        # bear_sideways → short_trend заблокируется в check_entry, поэтому сразу normal
 
     if direction == "long":
         if (
-            prob >= 75
-            and reversal_score >= 2
+            reversal_score >= 2
             and (rsi <= 40 or sr_signal == "bounce_support")
             and volume >= 1_000_000
         ):
             return "long_reversal"
 
         if (
-            prob >= 75
-            and impulse_score >= 3
+            impulse_score >= 3
             and r_1h >= 0.02
             and relative_strength >= 1.0
             and volume >= 1_000_000
@@ -229,14 +235,21 @@ def detect_market_mode(features: dict, forecast: dict) -> str:
     if btc_regime == "bear_market":
         if btc_structure == "downtrend":
             return "bear"
-        if btc_structure == "sideways":
-            return "bear_sideways"
+        return "bear_sideways"
+
+    if btc_regime == "mild_bear":
+        return "bear_sideways"
+
+    if btc_regime == "crash":
+        return "bear"
 
     if btc_regime == "bull_market":
         if btc_structure == "uptrend":
             return "bull"
-        if btc_structure == "sideways":
-            return "bull_sideways"
+        return "bull_sideways"
+
+    if btc_regime == "mild_bull":
+        return "bull_sideways"
 
     return "sideways"
 
@@ -251,29 +264,23 @@ def btc_move_allows_entry(
     st = normalize_setup_type(setup_type)
     btc_mom = str(btc_momentum or "").lower()
 
-    # ---------------- LONG REVERSAL ----------------
     if st == "long_reversal":
-        if btc_mom in ("strong_down", "weak_down", "flat"):
-            return False, f"btc_momentum_block_long_reversal({btc_mom})"
+        return False, "long_reversal_disabled_temp"
 
-    # ---------------- LONG IMPULSE ----------------
     elif st == "long_impulse":
         if btc_mom == "strong_down":
             return False, "btc_strong_down_block"
         if btc_mom == "weak_down" and (prob < 72 or relative_strength < 1.0):
             return False, "btc_weak_down_filter"
 
-    # ---------------- LONG TREND ----------------
     elif st == "long_trend":
         if btc_mom in ("strong_down", "weak_down"):
             return False, "btc_down_block_trend"
 
-    # ---------------- SHORT TREND ----------------
     elif st == "short_trend":
         if btc_mom in ("strong_up", "weak_up"):
             return False, "btc_up_block_short_trend"
 
-    # ---------------- SHORT IMPULSE ----------------
     elif st == "short_impulse":
         if btc_mom == "strong_up":
             return False, "btc_strong_up_block"
@@ -328,21 +335,11 @@ def check_entry(
     except Exception:
         dist_to_resistance = None
 
-    if setup_type == "long_reversal":
-        min_prob = float(params.get("min_prob_long_reversal") or 62.0)
-    elif setup_type == "long_impulse":
-        min_prob = float(params.get("min_prob_long_impulse") or 68.0)
-    elif setup_type == "long_trend":
-        min_prob = float(params.get("min_prob_long_trend") or 72.0)
-    elif setup_type == "short_impulse":
-        min_prob = float(params.get("min_prob_short_impulse") or 70.0)
-    elif setup_type == "short_trend":
-        min_prob = float(params.get("min_prob_short_trend") or 75.0)
-    else:
-        min_prob = float(params.get("min_entry_probability") or 75.0)
-
-    if prob < min_prob:
-        return False, "", f"weak_prob({prob:.1f}<{min_prob:.1f},{setup_type})"
+    # Probability больше не главный фильтр входа.
+    # Она только отсекает совсем мусорные прогнозы.
+    min_prob_floor = float(params.get("min_prob_floor") or 55.0)
+    if prob < min_prob_floor:
+        return False, "", f"weak_prob_floor({prob:.1f}<{min_prob_floor:.1f})"
 
     if volume < 1_000_000:
         return False, "", f"low_volume({volume:.0f})"
@@ -372,27 +369,7 @@ def check_entry(
 
     # ---------------- LONG REVERSAL ----------------
     if setup_type == "long_reversal":
-        if direction != "long":
-            return False, "", "setup_dir_mismatch"
-
-        # В медвежьей среде long_reversal слишком часто ловит ножи
-        if market_mode in ("bear", "bear_sideways"):
-            return False, "", f"blocked_long_reversal_in_{market_mode}"
-
-        if reversal_score < 2:
-            return False, "", f"weak_reversal_score({reversal_score})"
-        if rsi > 42:
-            return False, "", f"long_reversal_rsi_too_high({rsi:.1f})"
-        if r_1h <= 0:
-            return False, "", f"no_reversal_momentum({r_1h:.3f})"
-        if sr_signal not in ("bounce_support", "breakout_up"):
-            return False, "", f"bad_sr_for_long_reversal({sr_signal})"
-        if dist_to_support is not None and dist_to_support > 1.2 and sr_signal == "bounce_support":
-            return False, "", f"too_far_from_support({dist_to_support:.2f})"
-        if relative_strength < -0.30:
-            return False, "", f"long_reversal_asset_too_weak({relative_strength:.2f})"
-
-        return True, "long", f"entry_ok_long_reversal(prob={prob:.1f})"    
+        return False, "", "long_reversal_disabled_temp" 
 
     # ---------------- LONG TREND ----------------
     if setup_type == "long_trend":
@@ -426,9 +403,7 @@ def check_entry(
             if relative_strength > 0:
                 return False, "", f"short_impulse_asset_not_weak_enough({relative_strength:.2f})"
             if sr_signal != "bounce_resistance":
-                return False, "", f"short_impulse_needs_resistance({sr_signal})"
-            if prob < float(params.get('min_prob_short_impulse_bear_sideways') or 78.0):
-                return False, "", f"weak_prob_bear_sideways({prob:.1f}<78.0)"
+                return False, "", f"short_impulse_needs_resistance({sr_signal})"    
 
         if impulse_score < 3:
             return False, "", f"weak_impulse_score({impulse_score})"
@@ -611,14 +586,27 @@ async def open_trade(
         return None
 
     balance = float(account["current_balance"])
-    size = calc_position_size(balance, params, features, setup_type)
+    size = calc_position_size(
+        balance,
+        params,
+        features,
+        setup_type,
+        float(forecast.get("direction_probability") or 0),
+    )
     if size < 10:
         logger.info(f"SKIP {symbol}: position too small after liquidity sizing (${size:.2f})")
         return None
 
     crypto = size / price
-    default_sl_price, sl_pct = await get_sl_price(symbol, price, direction)
+    default_sl_price, _ = await get_sl_price(symbol, price, direction)
     sl_price = float(sl_price_override) if sl_price_override and sl_price_override > 0 else default_sl_price
+
+    if direction == "short":
+        sl_pct = (sl_price - price) / price * 100
+    else:
+        sl_pct = (price - sl_price) / price * 100
+
+    sl_pct = round(sl_pct, 2)
     tp1 = float(params.get("tp1_percent") or 2.0)
 
     entry_features = forecast.get("features_snapshot") or {}
@@ -1096,7 +1084,13 @@ async def trading_cycle():
                 continue
 
             # Считаем размер с учётом ликвидности
-            planned_size = calc_position_size(balance, params, features, setup_type)
+            planned_size = calc_position_size(
+                balance,
+                params,
+                features,
+                setup_type,
+                float(forecast.get("direction_probability") or 0),
+            )
             if planned_size < 10:
                 logger.info(f"SKIP {symbol}: planned size too small (${planned_size:.2f})")
                 continue

@@ -117,10 +117,14 @@ def calc_position_size(
     if st == "long_impulse":
         size *= 0.90
     elif st == "short_impulse":
+        if btc_mom == "strong_down":
+            return True, "btc_strong_down_boost"
         size *= 1.00
     elif st == "long_trend":
         size *= 0.90
     elif st == "short_trend":
+        if btc_mom == "strong_down":
+            return True, "btc_strong_down_boost"
         size *= 0.95
     elif st == "normal":
         size *= 0.80
@@ -278,10 +282,14 @@ def btc_move_allows_entry(
             return False, "btc_down_block_trend"
 
     elif st == "short_trend":
+        if btc_mom == "strong_down":
+            return True, "btc_strong_down_boost"
         if btc_mom in ("strong_up", "weak_up"):
             return False, "btc_up_block_short_trend"
 
     elif st == "short_impulse":
+        if btc_mom == "strong_down":
+            return True, "btc_strong_down_boost"
         if btc_mom == "strong_up":
             return False, "btc_strong_up_block"
         if btc_mom == "weak_up" and (prob < 80 or relative_strength > 0):
@@ -407,11 +415,11 @@ def check_entry(
 
         if impulse_score < 3:
             return False, "", f"weak_impulse_score({impulse_score})"
-        if r_1h > -0.02:
+        if r_1h > -0.01:
             return False, "", f"weak_short_impulse_momentum({r_1h:.3f})"
-        if sr_signal == "bounce_support":
+        if sr_signal == "bounce_support" and impulse_score < 4:
             return False, "", "short_impulse_blocked_support"
-        if relative_strength > 1.0:
+        if relative_strength > 2.5:
             return False, "", f"short_impulse_too_strong_asset({relative_strength:.2f})"
         if rsi < 32:
             return False, "", f"short_impulse_rsi_too_low({rsi:.1f})"
@@ -423,16 +431,16 @@ def check_entry(
         if direction != "short":
             return False, "", "setup_dir_mismatch"
 
-        if market_mode != "bear":
+        if market_mode not in ("bear", "bear_sideways"):
             return False, "", f"bad_market_mode_for_short_trend({market_mode})"
 
-        if sr_signal == "bounce_support":
+        if sr_signal == "bounce_support" and impulse_score < 2:
             return False, "", "short_trend_support_block"
-        if r_1h > 0.01:
+        if r_1h > 0.03:
             return False, "", f"short_trend_bad_1h({r_1h:.3f})"
         if r_24h > 0.03:
             return False, "", f"short_trend_bad_24h({r_24h:.3f})"
-        if relative_strength > 1.0:
+        if relative_strength > 2.5:
             return False, "", f"short_trend_too_strong_asset({relative_strength:.2f})"
         if rsi < 34:
             return False, "", f"short_trend_rsi_too_low({rsi:.1f})"
@@ -454,7 +462,7 @@ def check_entry(
     if direction == "short":
         if sr_signal == "bounce_support":
             return False, "", "normal_short_support_block"
-        if r_1h > 0.01:
+        if r_1h > 0.03:
             return False, "", f"normal_short_bad_momentum({r_1h:.3f})"
         if rsi < 35:
             return False, "", f"normal_short_rsi_low({rsi:.1f})"

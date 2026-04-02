@@ -420,7 +420,7 @@ def check_entry(
             return False, "", f"weak_short_impulse_momentum({r_1h:.3f})"
         if sr_signal == "bounce_support" and impulse_score < 4:
             return False, "", "short_impulse_blocked_support"
-        if relative_strength > 1.5:
+        if relative_strength > 1.7:
             return False, "", f"short_impulse_too_strong_asset({relative_strength:.2f})"
         if rsi < 32:
             return False, "", f"short_impulse_rsi_too_low({rsi:.1f})"
@@ -441,7 +441,7 @@ def check_entry(
             return False, "", f"short_trend_bad_1h({r_1h:.3f})"
         if r_24h > 0.03:
             return False, "", f"short_trend_bad_24h({r_24h:.3f})"
-        if relative_strength > 1.5:
+        if relative_strength > 1.7:
             return False, "", f"short_trend_too_strong_asset({relative_strength:.2f})"
         if rsi < 34:
             return False, "", f"short_trend_rsi_too_low({rsi:.1f})"

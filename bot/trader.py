@@ -357,7 +357,7 @@ def check_entry(
         return False, "", "trash_liquidity"
 
     if direction == "short":
-        if dist_to_resistance is None or dist_to_resistance > 0.8:
+        if dist_to_resistance is None or dist_to_resistance > 1.5:
             return False, "", f"short_not_in_entry_zone({dist_to_resistance})"
 
     if direction == "long":

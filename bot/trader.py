@@ -356,6 +356,14 @@ def check_entry(
     if volume_bucket == "trash":
         return False, "", "trash_liquidity"
 
+    if direction == "short":
+        if dist_to_resistance is None or dist_to_resistance > 0.6:
+            return False, "", f"short_not_in_entry_zone({dist_to_resistance})"
+
+    if direction == "long":
+        if dist_to_support is None or dist_to_support > 0.4:
+            return False, "", f"long_not_in_entry_zone({dist_to_support})"
+
     # Слишком экстремальная среда — только для импульсов
     if volatility_bucket == "extreme" and setup_type not in ("short_impulse", "long_impulse"):
         return False, "", "extreme_volatility_non_impulse"
@@ -420,7 +428,7 @@ def check_entry(
             return False, "", f"weak_short_impulse_momentum({r_1h:.3f})"
         if sr_signal == "bounce_support" and impulse_score < 4:
             return False, "", "short_impulse_blocked_support"
-        if relative_strength > 1.7:
+        if relative_strength > 1.3:
             return False, "", f"short_impulse_too_strong_asset({relative_strength:.2f})"
         if rsi < 32:
             return False, "", f"short_impulse_rsi_too_low({rsi:.1f})"
@@ -435,13 +443,13 @@ def check_entry(
         if market_mode not in ("bear", "bear_sideways"):
             return False, "", f"bad_market_mode_for_short_trend({market_mode})"
 
-        if sr_signal == "bounce_support" and impulse_score < 2:
+        if sr_signal == "bounce_support":
             return False, "", "short_trend_support_block"
         if r_1h > 0.03:
             return False, "", f"short_trend_bad_1h({r_1h:.3f})"
         if r_24h > 0.03:
             return False, "", f"short_trend_bad_24h({r_24h:.3f})"
-        if relative_strength > 1.7:
+        if relative_strength > 1.3:
             return False, "", f"short_trend_too_strong_asset({relative_strength:.2f})"
         if rsi < 34:
             return False, "", f"short_trend_rsi_too_low({rsi:.1f})"
@@ -474,7 +482,7 @@ def check_entry(
 
 async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool, str]:
     fc_age = (datetime.now(timezone.utc) - forecast["created_at"].replace(tzinfo=timezone.utc)).total_seconds() / 60
-    if fc_age > 15:
+    if fc_age > 30:
         return False, f"stale_forecast({fc_age:.0f}min)"
 
     prob = float(forecast.get("direction_probability") or 50)
@@ -962,7 +970,7 @@ async def trading_cycle():
         return
 
     banned = set(params.get("banned_symbols") or [])
-    fc_max_age = float(params.get("forecast_max_age_minutes") or 15)
+    fc_max_age = float(params.get("forecast_max_age_minutes") or 30)
 
     open_trades = await get_open_trades(account["id"])
     logger.info(f"Cycle open trades loaded: {len(open_trades)}")

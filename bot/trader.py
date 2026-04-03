@@ -426,7 +426,7 @@ def check_entry(
             return False, "", f"weak_impulse_score({impulse_score})"
         if r_1h > -0.01:
             return False, "", f"weak_short_impulse_momentum({r_1h:.3f})"
-        if sr_signal == "bounce_support" and impulse_score < 4:
+        if sr_signal == "bounce_support":
             return False, "", "short_impulse_blocked_support"
         if relative_strength > 1.3:
             return False, "", f"short_impulse_too_strong_asset({relative_strength:.2f})"

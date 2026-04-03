@@ -172,7 +172,7 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
         if (
             impulse_score >= 3
             and r_1h <= -0.02
-            and sr_signal in ("bounce_resistance", "breakout_down", "neutral")
+            and sr_signal in ("bounce_resistance", "breakout_down", "retest_broken_support_short", "neutral")
             and relative_strength <= 0.5
             and volume >= 1_000_000
         ):
@@ -184,7 +184,7 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
     if direction == "long":
         if (
             reversal_score >= 2
-            and (rsi <= 40 or sr_signal == "bounce_support")
+            and (rsi <= 40 or sr_signal in ("bounce_support", "retest_broken_resistance_long"))
             and volume >= 1_000_000
         ):
             return "long_reversal"
@@ -357,12 +357,20 @@ def check_entry(
         return False, "", "trash_liquidity"
 
     if direction == "short":
-        if dist_to_resistance is None or dist_to_resistance > 2.0:
-            return False, "", f"short_not_in_entry_zone({dist_to_resistance})"
+        if sr_signal == "retest_broken_support_short":
+            if dist_to_support is None or dist_to_support > 2.0:
+                return False, "", f"short_not_in_entry_zone({dist_to_support})"
+        else:
+            if dist_to_resistance is None or dist_to_resistance > 2.0:
+                return False, "", f"short_not_in_entry_zone({dist_to_resistance})"
 
     if direction == "long":
-        if dist_to_support is None or dist_to_support > 0.4:
-            return False, "", f"long_not_in_entry_zone({dist_to_support})"
+        if sr_signal == "retest_broken_resistance_long":
+            if dist_to_resistance is None or dist_to_resistance > 0.4:
+                return False, "", f"long_not_in_entry_zone({dist_to_resistance})"
+        else:
+            if dist_to_support is None or dist_to_support > 0.4:
+                return False, "", f"long_not_in_entry_zone({dist_to_support})"
 
     # Слишком экстремальная среда — только для импульсов
     if volatility_bucket == "extreme" and setup_type not in ("short_impulse", "long_impulse"):
@@ -419,7 +427,7 @@ def check_entry(
                 return False, "", f"weak_short_impulse_bear_sideways({r_1h:.3f})"
             if relative_strength > 0:
                 return False, "", f"short_impulse_asset_not_weak_enough({relative_strength:.2f})"
-            if sr_signal != "bounce_resistance":
+            if sr_signal not in ("bounce_resistance", "retest_broken_support_short"):
                 return False, "", f"short_impulse_needs_resistance({sr_signal})"    
 
         if impulse_score < 3:

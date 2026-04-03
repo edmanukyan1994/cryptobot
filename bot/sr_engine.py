@@ -394,6 +394,73 @@ def find_volume_profile(candles: list, current_price: float, bins: int = 100) ->
 # CONFLUENCE — ОБЪЕДИНЯЕМ ВСЕ МЕТОДЫ
 # ============================================================
 
+def classify_sr_signal(candles: list, current_price: float, nearest_support: dict | None, nearest_resistance: dict | None) -> tuple[str, float]:
+    """
+    Отличает обычный bounce от пробоя с ретестом.
+    """
+    if not candles or len(candles) < 8 or current_price <= 0:
+        return "neutral", 0.0
+
+    closes = [float(c["close"]) for c in candles[-8:]]
+    highs = [float(c["high"]) for c in candles[-8:]]
+    lows = [float(c["low"]) for c in candles[-8:]]
+
+    signal = "neutral"
+    strength_mult = 1.0
+
+    if nearest_support:
+        sup = float(nearest_support["price"])
+        dist_sup = (current_price - sup) / current_price * 100
+
+        was_above_sup = any(cl > sup * 1.001 for cl in closes[:-2])
+        broke_below_sup = any(cl < sup * 0.999 for cl in closes[-4:])
+        retested_sup_from_below = (
+            current_price < sup
+            and dist_sup >= 0
+            and dist_sup <= 2.0
+            and max(highs[-4:]) >= sup * 0.999
+            and closes[-1] <= sup * 1.001
+        )
+
+        if was_above_sup and broke_below_sup and retested_sup_from_below:
+            return "retest_broken_support_short", 1.15
+
+    if nearest_resistance:
+        res = float(nearest_resistance["price"])
+        dist_res = (res - current_price) / current_price * 100
+
+        was_below_res = any(cl < res * 0.999 for cl in closes[:-2])
+        broke_above_res = any(cl > res * 1.001 for cl in closes[-4:])
+        retested_res_from_above = (
+            current_price > res
+            and dist_res <= 0
+            and abs(dist_res) <= 2.0
+            and min(lows[-4:]) <= res * 1.001
+            and closes[-1] >= res * 0.999
+        )
+
+        if was_below_res and broke_above_res and retested_res_from_above:
+            return "retest_broken_resistance_long", 1.15
+
+    if nearest_support:
+        sup = float(nearest_support["price"])
+        dist_sup = (current_price - sup) / current_price * 100
+        if 0 <= dist_sup <= 2.0:
+            return "bounce_support", 1.0
+        if current_price < sup:
+            return "breakout_down", 0.9
+
+    if nearest_resistance:
+        res = float(nearest_resistance["price"])
+        dist_res = (res - current_price) / current_price * 100
+        if 0 <= dist_res <= 2.0:
+            return "bounce_resistance", 1.0
+        if current_price > res:
+            return "breakout_up", 0.9
+
+    return signal, strength_mult
+
+
 # Веса методов
 METHOD_WEIGHTS = {
     "horizontal": 0.35,   # реальные уровни от торгов
@@ -418,7 +485,7 @@ METHOD_WEIGHTS = {
     "psychological": 0.15, # круглые числа
 }
 
-def calc_confluence(all_levels: list, current_price: float) -> dict:
+def calc_confluence(all_levels: list, current_price: float, candles: list | None = None) -> dict:
     """
     Объединяет уровни из всех методов.
     Confluence score = сумма весов методов которые подтверждают уровень.
@@ -488,22 +555,12 @@ def calc_confluence(all_levels: list, current_price: float) -> dict:
     signal = "neutral"
     signal_strength = 0.0
 
-    if nearest_support and nearest_resistance:
-        dist_sup = (current_price - nearest_support["price"]) / current_price * 100
-        dist_res = (nearest_resistance["price"] - current_price) / current_price * 100
-
-        if dist_sup <= 2.0 and nearest_support["confluence_score"] >= 0.2:
-            signal = "bounce_support"
-            signal_strength = nearest_support["confluence_score"] * (1 - dist_sup/4) * 100
-        elif dist_res <= 2.0 and nearest_resistance["confluence_score"] >= 0.2:
-            signal = "bounce_resistance"
-            signal_strength = nearest_resistance["confluence_score"] * (1 - dist_res/4) * 100
-        elif current_price > nearest_resistance["price"]:
-            signal = "breakout_up"
-            signal_strength = nearest_resistance["confluence_score"] * 70
-        elif current_price < nearest_support["price"]:
-            signal = "breakout_down"
-            signal_strength = nearest_support["confluence_score"] * 70
+    signal, strength_mult = classify_sr_signal(
+        candles=candles or [],
+        current_price=current_price,
+        nearest_support=nearest_support,
+        nearest_resistance=nearest_resistance,
+    )
 
     # R/R для входа
     rr_short = rr_long = 0.0
@@ -514,6 +571,21 @@ def calc_confluence(all_levels: list, current_price: float) -> dict:
             rr_long = dist_res / (dist_sup * 0.3 + 0.1)  # стоп ~0.3% за уровень
         if dist_res > 0:
             rr_short = dist_sup / (dist_res * 0.3 + 0.1)
+
+    if signal == "bounce_support" and nearest_support:
+        dist_sup = max(0.0, (current_price - nearest_support["price"]) / current_price * 100)
+        signal_strength = nearest_support["confluence_score"] * (1 - dist_sup / 4) * 100 * strength_mult
+    elif signal == "bounce_resistance" and nearest_resistance:
+        dist_res = max(0.0, (nearest_resistance["price"] - current_price) / current_price * 100)
+        signal_strength = nearest_resistance["confluence_score"] * (1 - dist_res / 4) * 100 * strength_mult
+    elif signal == "retest_broken_support_short" and nearest_support:
+        signal_strength = nearest_support["confluence_score"] * 85 * strength_mult
+    elif signal == "retest_broken_resistance_long" and nearest_resistance:
+        signal_strength = nearest_resistance["confluence_score"] * 85 * strength_mult
+    elif signal == "breakout_up" and nearest_resistance:
+        signal_strength = nearest_resistance["confluence_score"] * 70 * strength_mult
+    elif signal == "breakout_down" and nearest_support:
+        signal_strength = nearest_support["confluence_score"] * 70 * strength_mult
 
     return {
         "supports": supports[:5],
@@ -593,7 +665,7 @@ async def analyze_sr_v2(session: aiohttp.ClientSession, symbol: str) -> dict | N
         volume_1d["supports"] + volume_1d["resistances"]
     )
 
-    result = calc_confluence(all_levels, current_price)
+    result = calc_confluence(all_levels, current_price, candles_1h)
     result["symbol"] = symbol
     result["price"] = current_price
     result["poc"] = volume.get("poc")
@@ -619,7 +691,7 @@ def get_sr_entry_signal(sr: dict, direction: str) -> tuple[bool, float, str]:
         return False, 0.0, "invalid_price"
 
     if direction == "long":
-        if signal not in ("bounce_support", "breakout_up"):
+        if signal not in ("bounce_support", "breakout_up", "retest_broken_resistance_long"):
             return False, 0.0, f"sr_no_long({signal})"
         if strength < 15:
             return False, 0.0, f"sr_weak({strength:.0f}<15)"
@@ -631,7 +703,7 @@ def get_sr_entry_signal(sr: dict, direction: str) -> tuple[bool, float, str]:
         return True, sl, f"sr_long({signal},str={strength:.0f},rr={rr:.1f})"
 
     elif direction == "short":
-        if signal not in ("bounce_resistance", "breakout_down"):
+        if signal not in ("bounce_resistance", "breakout_down", "retest_broken_support_short"):
             return False, 0.0, f"sr_no_short({signal})"
         if strength < 15:
             return False, 0.0, f"sr_weak({strength:.0f}<15)"

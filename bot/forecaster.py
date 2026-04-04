@@ -642,7 +642,15 @@ async def forecast_symbol(symbol: str, features: dict) -> list:
                 for k, v in scores.items()
             ) * env_penalty
 
-            direction, prob, conf = calc_probability(bull_total, bear_total)
+                direction, prob, conf = calc_probability(bull_total, bear_total)
+    
+    # ПРИНУДИТЕЛЬНЫЙ up для экстремально перепроданных монет (ВРЕМЕННО!)
+    if rsi is not None and rsi <= 10 and price > 0:
+        if direction != "up" and volume_bucket not in ("trash", "low"):
+            direction = "up"
+            prob = max(prob, 65.0)
+            logger.info(f"FORCED UP: {symbol} RSI={rsi:.1f} price={price}")
+
 
             # мягкая нормализация под market_mode
             if direction == "down" and market_mode == "bull":

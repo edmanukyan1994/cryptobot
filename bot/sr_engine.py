@@ -395,33 +395,25 @@ def find_volume_profile(candles: list, current_price: float, bins: int = 100) ->
 # ============================================================
 
 def classify_sr_signal(candles: list, current_price: float, nearest_support: dict | None, nearest_resistance: dict | None) -> tuple[str, float]:
-    """
-    Отличает обычный bounce от пробоя с ретестом.
-    Упрощённая рабочая логика:
-    - если цена уже по другую сторону уровня
-    - и последние свечи тестировали этот уровень
-    - считаем это retest
-    """
-    if not candles or len(candles) < 6 or current_price <= 0:
+    if not candles or len(candles) < 10 or current_price <= 0:
         return "neutral", 0.0
 
-    closes = [float(c["close"]) for c in candles[-6:]]
-    highs = [float(c["high"]) for c in candles[-6:]]
-    lows = [float(c["low"]) for c in candles[-6:]]
+    closes = [float(c["close"]) for c in candles[-10:]]
 
     if nearest_support:
         sup = float(nearest_support["price"])
         dist_sup = abs(current_price - sup) / current_price * 100
 
-        # Цена уже ниже поддержки, но последние свечи трогали её снизу -> retest broken support
-        if current_price < sup and dist_sup <= 2.0 and max(highs[-4:]) >= sup * 0.995:
-            return "retest_broken_support_short", 1.15
+        was_above = any(cl > sup * 1.002 for cl in closes[:-3])
+        broke_below = any(cl < sup * 0.998 for cl in closes[-6:])
+        retest_zone = abs(closes[-1] - sup) / sup < 0.01
 
-        # Обычный bounce от поддержки
+        if was_above and broke_below and retest_zone:
+            return "retest_broken_support_short", 1.2
+
         if current_price >= sup and dist_sup <= 2.0:
             return "bounce_support", 1.0
 
-        # Чистый пробой вниз
         if current_price < sup:
             return "breakout_down", 0.9
 
@@ -429,19 +421,21 @@ def classify_sr_signal(candles: list, current_price: float, nearest_support: dic
         res = float(nearest_resistance["price"])
         dist_res = abs(current_price - res) / current_price * 100
 
-        # Цена уже выше сопротивления, но последние свечи трогали его сверху -> retest broken resistance
-        if current_price > res and dist_res <= 2.0 and min(lows[-4:]) <= res * 1.005:
-            return "retest_broken_resistance_long", 1.15
+        was_below = any(cl < res * 0.998 for cl in closes[:-3])
+        broke_above = any(cl > res * 1.002 for cl in closes[-6:])
+        retest_zone = abs(closes[-1] - res) / res < 0.01
 
-        # Обычный bounce от сопротивления
+        if was_below and broke_above and retest_zone:
+            return "retest_broken_resistance_long", 1.2
+
         if current_price <= res and dist_res <= 2.0:
             return "bounce_resistance", 1.0
 
-        # Чистый пробой вверх
         if current_price > res:
             return "breakout_up", 0.9
 
     return "neutral", 1.0
+
 
 
 # Веса методов

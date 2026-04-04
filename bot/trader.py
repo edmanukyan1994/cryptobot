@@ -397,6 +397,17 @@ def check_entry(
     if setup_type == "long_reversal":
         return False, "", "long_reversal_disabled_temp" 
 
+    # === СПЕЦИАЛЬНОЕ ИСКЛЮЧЕНИЕ: Long Reversal в bear market при экстремальной перепроданности ===
+    if direction == "long" and market_mode in ("bear", "bear_sideways"):
+        rsi_val = rsi if rsi is not None else 50.0
+        dist_val = dist_to_support if dist_to_support is not None else 999.0
+        vol_bucket = str(volume_bucket or "unknown")
+        
+        if rsi_val <= 22 and dist_val <= 0.8 and vol_bucket not in ("trash", "low"):
+            logger.info(f"🔥 EXTREME LONG REVERSAL ALLOWED: {symbol} RSI={rsi_val:.1f} dist={dist_val:.2f}% vol={vol_bucket}")
+            return True, "long", f"long_reversal_extreme(rsi={rsi_val:.1f},dist={dist_val:.2f})"
+
+
     # ---------------- LONG TREND ----------------
     if setup_type == "long_trend":
         if direction != "long":

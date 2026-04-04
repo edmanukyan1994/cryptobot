@@ -152,11 +152,11 @@ def detect_crash_mode(btc_24h_change: float, btc_7d_change: float, above_ma200_1
     Отдельный crash-флаг.
     Он полезен trader'у и forecaster'у независимо от общего режима.
     """
-    if btc_24h_change <= -4.5:
+    if btc_24h_change <= -8.0:
         return True
-    if btc_24h_change <= -3.0 and not above_ma200_1d:
+    if btc_24h_change <= -5.0 and not above_ma200_1d:
         return True
-    if btc_7d_change <= -10.0 and not above_ma200_1d:
+    if btc_7d_change <= -15.0 and not above_ma200_1d:
         return True
     return False
 
@@ -277,6 +277,22 @@ async def update_market_context():
                 global_regime = "mild_bear"
             else:
                 global_regime = "neutral"
+
+    # === ЗАЩИТА ОТ ЛОЖНОГО CRASH ===
+    if global_regime == "crash":
+        # Если объём падает, это паника, а не настоящий крах
+        if vol_trend_1d == "decreasing":
+            global_regime = "bear_market"
+            logger.info(f"Crash demoted to bear_market due to decreasing volume")
+        # Если BTC выше MA200, не может быть краха
+        elif above_ma200_1d:
+            global_regime = "bear_market"
+            logger.info(f"Crash demoted to bear_market because price above MA200")
+        # Если 24h изменение меньше 3% вниз, это не крах
+        elif btc_24h_change > -3.0:
+            global_regime = "bear_market"
+            logger.info(f"Crash demoted to bear_market: 24h change {btc_24h_change:.1f}% > -3%")
+
 
             # Сила тренда (0-100)
             trend_strength = abs(bull_signals - bear_signals) / total * 100 if total > 0 else 0

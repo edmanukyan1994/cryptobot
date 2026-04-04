@@ -772,14 +772,6 @@ async def check_exit(trade, price, params):
         if direction == "short" and price >= sl_price:
             return True, "stop_loss", 100
 
-    scalp_tp = float(params.get("scalp_tp_percent") or 0.6)
-    scalp_sl = float(params.get("scalp_sl_percent") or 0.7)
-
-    if latest_market_mode == "bear_sideways":
-        if pnl_pct >= scalp_tp:
-            return True, f"scalp_tp({scalp_tp:.1f})", 100
-        if pnl_pct <= -scalp_sl:
-            return True, f"scalp_sl({scalp_sl:.1f})", 100
 
     latest_r_24h = None
     latest_market_mode = "sideways"
@@ -795,6 +787,15 @@ async def check_exit(trade, price, params):
         latest_r_24h = float(sr_features["r_24h"])
     if sr_features and sr_features["market_mode"]:
         latest_market_mode = str(sr_features["market_mode"])
+
+    scalp_tp = float(params.get("scalp_tp_percent") or 0.6)
+    scalp_sl = float(params.get("scalp_sl_percent") or 0.7)
+
+    if latest_market_mode == "bear_sideways":
+        if pnl_pct >= scalp_tp:
+            return True, f"scalp_tp({scalp_tp:.1f})", 100
+        if pnl_pct <= -scalp_sl:
+            return True, f"scalp_sl({scalp_sl:.1f})", 100
 
     latest_fc = await get_latest_forecast(trade["symbol"], "4h")
     if latest_fc:

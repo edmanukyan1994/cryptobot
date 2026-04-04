@@ -14,6 +14,7 @@ import asyncio
 import aiohttp
 import logging
 import numpy as np
+import json
 from datetime import datetime, timezone
 import db
 
@@ -132,13 +133,11 @@ def detect_market_mode(global_regime: str, price_structure_4h: str) -> str:
     if global_regime in ("bear_market", "mild_bear"):
         if price_structure_4h == "downtrend":
             return "bear"
-        # uptrend внутри медвежьего рынка = локальный отскок, всё равно bear_sideways
         return "bear_sideways"
 
     if global_regime in ("bull_market", "mild_bull"):
         if price_structure_4h == "uptrend":
             return "bull"
-        # downtrend внутри бычьего рынка = локальная коррекция, всё равно bull_sideways
         return "bull_sideways"
 
     return "sideways"
@@ -147,7 +146,6 @@ def detect_market_mode(global_regime: str, price_structure_4h: str) -> str:
 def detect_crash_mode(btc_24h_change: float, btc_7d_change: float, above_ma200_1d: bool | None) -> bool:
     """
     Отдельный crash-флаг.
-    Он полезен trader'у и forecaster'у независимо от общего режима.
     """
     if btc_24h_change <= -8.0:
         return True
@@ -277,15 +275,12 @@ async def update_market_context():
 
             # === ЗАЩИТА ОТ ЛОЖНОГО CRASH ===
             if global_regime == "crash":
-                # Если объём падает, это паника, а не настоящий крах
                 if vol_trend_1d == "decreasing":
                     global_regime = "bear_market"
                     logger.info(f"Crash demoted to bear_market due to decreasing volume")
-                # Если BTC выше MA200, не может быть краха
                 elif above_ma200_1d:
                     global_regime = "bear_market"
                     logger.info(f"Crash demoted to bear_market because price above MA200")
-                # Если 24h изменение меньше 3% вниз, это не крах
                 elif btc_24h_change > -3.0:
                     global_regime = "bear_market"
                     logger.info(f"Crash demoted to bear_market: 24h change {btc_24h_change:.1f}% > -3%")
@@ -329,38 +324,27 @@ async def update_market_context():
             fg = float(fg_row["value"]) if fg_row else 50.0
 
             _context = {
-                # базовые данные
                 "btc_price": btc_price,
                 "btc_24h_change": round(btc_24h_change, 2),
                 "btc_7d_change": round(btc_7d_change, 2),
                 "btc_4h_change": round(btc_4h_change, 2),
-
-                # MA
                 "btc_ma20_1d": round(ma20_1d, 2) if ma20_1d else None,
                 "btc_ma50_1d": round(ma50_1d, 2) if ma50_1d else None,
                 "btc_ma200_1d": round(ma200_1d, 2) if ma200_1d else None,
                 "btc_ma20_4h": round(ma20_4h, 2) if ma20_4h else None,
                 "btc_ma50_4h": round(ma50_4h, 2) if ma50_4h else None,
-
-                # положения цены
                 "above_ma20_1d": above_ma20_1d,
                 "above_ma50_1d": above_ma50_1d,
                 "above_ma200_1d": above_ma200_1d,
                 "above_ma20_4h": above_ma20_4h,
                 "above_ma50_4h": above_ma50_4h,
-
-                # структура
                 "price_structure_1d": price_structure_1d,
                 "price_structure_4h": price_structure_4h,
                 "vol_trend_1d": vol_trend_1d,
-
-                # старые поля
                 "global_regime": global_regime,
                 "trend_strength": round(trend_strength, 1),
                 "bull_signals": bull_signals,
                 "bear_signals": bear_signals,
-
-                # новые поля
                 "market_mode": market_mode,
                 "momentum": momentum,
                 "regime_score": regime_score,
@@ -370,11 +354,8 @@ async def update_market_context():
                 "no_long_zone": no_long_zone,
                 "no_short_zone": no_short_zone,
                 "btc_move_strength": round(btc_move_strength, 2),
-
-                # внешние данные
                 "btc_dominance": btc_dominance,
                 "fear_greed": fg,
-
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
 
@@ -388,6 +369,20 @@ async def update_market_context():
                 f"momentum={momentum} "
                 f"vol={vol_trend_1d}"
             )
+
+            # Сохраняем контекст в БД
+            try:
+                await db.execute("""
+                    INSERT INTO crypto_market_global (id, btc_dominance, total_market_cap, updated_at, features_snapshot)
+                    VALUES ('latest', $1, $2, NOW(), $3)
+                    ON CONFLICT (id) DO UPDATE SET
+                        btc_dominance = EXCLUDED.btc_dominance,
+                        total_market_cap = EXCLUDED.total_market_cap,
+                        updated_at = NOW(),
+                        features_snapshot = EXCLUDED.features_snapshot
+                """, btc_dominance, None, json.dumps(_context))
+            except Exception as e:
+                logger.warning(f"Failed to save market context to DB: {e}")
 
     except Exception as e:
         logger.error(f"Market context update error: {e}")

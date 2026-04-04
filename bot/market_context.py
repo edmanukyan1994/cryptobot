@@ -141,9 +141,6 @@ def detect_market_mode(global_regime: str, price_structure_4h: str) -> str:
         # downtrend внутри бычьего рынка = локальная коррекция, всё равно bull_sideways
         return "bull_sideways"
 
-    if global_regime == "crash":
-        return "bear"
-
     return "sideways"
 
 
@@ -278,21 +275,20 @@ async def update_market_context():
             else:
                 global_regime = "neutral"
 
-    # === ЗАЩИТА ОТ ЛОЖНОГО CRASH ===
-    if global_regime == "crash":
-        # Если объём падает, это паника, а не настоящий крах
-        if vol_trend_1d == "decreasing":
-            global_regime = "bear_market"
-            logger.info(f"Crash demoted to bear_market due to decreasing volume")
-        # Если BTC выше MA200, не может быть краха
-        elif above_ma200_1d:
-            global_regime = "bear_market"
-            logger.info(f"Crash demoted to bear_market because price above MA200")
-        # Если 24h изменение меньше 3% вниз, это не крах
-        elif btc_24h_change > -3.0:
-            global_regime = "bear_market"
-            logger.info(f"Crash demoted to bear_market: 24h change {btc_24h_change:.1f}% > -3%")
-
+            # === ЗАЩИТА ОТ ЛОЖНОГО CRASH ===
+            if global_regime == "crash":
+                # Если объём падает, это паника, а не настоящий крах
+                if vol_trend_1d == "decreasing":
+                    global_regime = "bear_market"
+                    logger.info(f"Crash demoted to bear_market due to decreasing volume")
+                # Если BTC выше MA200, не может быть краха
+                elif above_ma200_1d:
+                    global_regime = "bear_market"
+                    logger.info(f"Crash demoted to bear_market because price above MA200")
+                # Если 24h изменение меньше 3% вниз, это не крах
+                elif btc_24h_change > -3.0:
+                    global_regime = "bear_market"
+                    logger.info(f"Crash demoted to bear_market: 24h change {btc_24h_change:.1f}% > -3%")
 
             # Сила тренда (0-100)
             trend_strength = abs(bull_signals - bear_signals) / total * 100 if total > 0 else 0
@@ -403,4 +399,3 @@ async def run_market_context():
     while True:
         await update_market_context()
         await asyncio.sleep(1800)  # 30 минут
-

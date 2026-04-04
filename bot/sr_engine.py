@@ -394,50 +394,60 @@ def find_volume_profile(candles: list, current_price: float, bins: int = 100) ->
 # CONFLUENCE — ОБЪЕДИНЯЕМ ВСЕ МЕТОДЫ
 # ============================================================
 
+
 def classify_sr_signal(candles: list, current_price: float, nearest_support: dict | None, nearest_resistance: dict | None) -> tuple[str, float]:
-    if not candles or len(candles) < 10 or current_price <= 0:
-        return "neutral", 0.0
+    """
+    Профессиональная логика:
+    - учитывает ПРОБОЙ → ВОЗВРАТ → РЕАКЦИЮ
+    """
 
-    closes = [float(c["close"]) for c in candles[-10:]]
+    if not candles or len(candles) < 8 or current_price <= 0:
+        return "neutral", 1.0
 
+    closes = [float(c["close"]) for c in candles[-8:]]
+    highs = [float(c["high"]) for c in candles[-8:]]
+    lows = [float(c["low"]) for c in candles[-8:]]
+
+    # === SHORT RETEST ===
     if nearest_support:
-        sup = float(nearest_support["price"])
-        dist_sup = abs(current_price - sup) / current_price * 100
+        level = float(nearest_support["price"])
 
-        was_above = any(cl > sup * 1.002 for cl in closes[:-3])
-        broke_below = any(cl < sup * 0.998 for cl in closes[-6:])
-        retest_zone = abs(closes[-1] - sup) / sup < 0.01
+        was_above = any(cl > level * 1.002 for cl in closes[:-3])
+        broke_down = any(cl < level * 0.998 for cl in closes[-4:])
+        retest = max(highs[-3:]) >= level * 0.995
 
-        if was_above and broke_below and retest_zone:
+        if was_above and broke_down and retest and current_price < level:
             return "retest_broken_support_short", 1.2
 
-        if current_price >= sup and dist_sup <= 2.0:
-            return "bounce_support", 1.0
+    # === LONG RETEST ===
+    if nearest_resistance:
+        level = float(nearest_resistance["price"])
 
-        if current_price < sup:
+        was_below = any(cl < level * 0.998 for cl in closes[:-3])
+        broke_up = any(cl > level * 1.002 for cl in closes[-4:])
+        retest = min(lows[-3:]) <= level * 1.005
+
+        if was_below and broke_up and retest and current_price > level:
+            return "retest_broken_resistance_long", 1.2
+
+    # === КЛАССИКА (fallback) ===
+    if nearest_support:
+        level = float(nearest_support["price"])
+        dist = abs(current_price - level) / current_price * 100
+        if current_price >= level and dist <= 2.0:
+            return "bounce_support", 1.0
+        if current_price < level:
             return "breakout_down", 0.9
 
     if nearest_resistance:
-        res = float(nearest_resistance["price"])
-        dist_res = abs(current_price - res) / current_price * 100
-
-        was_below = any(cl < res * 0.998 for cl in closes[:-3])
-        broke_above = any(cl > res * 1.002 for cl in closes[-6:])
-        retest_zone = abs(closes[-1] - res) / res < 0.01
-
-        if was_below and broke_above and retest_zone:
-            return "retest_broken_resistance_long", 1.2
-
-        if current_price <= res and dist_res <= 2.0:
+        level = float(nearest_resistance["price"])
+        dist = abs(current_price - level) / current_price * 100
+        if current_price <= level and dist <= 2.0:
             return "bounce_resistance", 1.0
-
-        if current_price > res:
+        if current_price > level:
             return "breakout_up", 0.9
 
     return "neutral", 1.0
-
-
-
 # Веса методов
 METHOD_WEIGHTS = {
     "horizontal": 0.35,   # реальные уровни от торгов

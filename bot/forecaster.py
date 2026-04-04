@@ -23,20 +23,20 @@ logger = logging.getLogger("forecaster")
 HORIZONS = {"1h": 1, "4h": 4, "24h": 24}
 
 BASE_WEIGHTS = {
-    "momentum":          0.16,
-    "rsi":               0.11,
+    "momentum":          0.22,
+    "rsi":               0.14,
     "sr":                0.12,
     "bollinger":         0.07,
     "macd":              0.07,
     "candlestick":       0.06,
     "fear_greed":        0.05,
-    "regime":            0.04,
-    "btc_trend":         0.10,
+    "regime":            0.05,
+    "btc_trend":         0.05,
     "volume_trend":      0.04,
-    "market_structure":  0.07,
+    "market_structure":  0.04,
     "relative_strength": 0.05,
-    "impulse":           0.03,
-    "reversal":          0.03,
+    "impulse":           0.02,
+    "reversal":          0.02,
 }
 
 

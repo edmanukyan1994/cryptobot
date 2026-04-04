@@ -781,15 +781,15 @@ async def check_exit(trade, price, params):
         if pnl_pct <= -scalp_sl:
             return True, f"scalp_sl({scalp_sl:.1f})", 100
 
+    latest_r_24h = None
+    latest_market_mode = "sideways"
+
     sr_features = await db.fetchrow(
         """SELECT support_1, resistance_1, r_24h, atr, price, market_mode
            FROM crypto_features_hourly
            WHERE symbol=$1 ORDER BY ts DESC LIMIT 1""",
         trade["symbol"]
     )
-
-    latest_r_24h = None
-    latest_market_mode = "sideways"
 
     if sr_features and sr_features["r_24h"] is not None:
         latest_r_24h = float(sr_features["r_24h"])

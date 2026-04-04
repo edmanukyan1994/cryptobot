@@ -1,4 +1,3 @@
-cd /Users/edgarmanukyan/Desktop/cryptobot-main-2/bot && cat > forecaster.py << 'EOF'
 """
 Forecaster v3 — расширенная модель прогнозирования.
 """
@@ -572,4 +571,3 @@ async def run_forecaster():
         except Exception as e:
             logger.error(f"Forecaster error: {e}")
         await asyncio.sleep(FORECAST_INTERVAL)
-EOF

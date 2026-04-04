@@ -14,6 +14,7 @@ logger = logging.getLogger("trader")
 
 MAX_OPEN = 100
 MAX_NEW_PER_CYCLE = 2
+SCALP_MAX_NEW_PER_CYCLE = 5
 
 SECTOR = {
     "BTC": "btc", "ETH": "eth", "BNB": "exchange",
@@ -771,6 +772,15 @@ async def check_exit(trade, price, params):
         if direction == "short" and price >= sl_price:
             return True, "stop_loss", 100
 
+    scalp_tp = float(params.get("scalp_tp_percent") or 0.6)
+    scalp_sl = float(params.get("scalp_sl_percent") or 0.7)
+
+    if latest_market_mode == "bear_sideways":
+        if pnl_pct >= scalp_tp:
+            return True, f"scalp_tp({scalp_tp:.1f})", 100
+        if pnl_pct <= -scalp_sl:
+            return True, f"scalp_sl({scalp_sl:.1f})", 100
+
     sr_features = await db.fetchrow(
         """SELECT support_1, resistance_1, r_24h, atr, price, market_mode
            FROM crypto_features_hourly
@@ -1038,11 +1048,17 @@ async def trading_cycle():
     ]
     logger.info(f"Cycle candidates prepared: {len(candidates)}")
 
+    btc_mode_row = await db.fetchrow(
+        "SELECT market_mode FROM crypto_features_hourly WHERE symbol='BTC' ORDER BY ts DESC LIMIT 1"
+    )
+    current_market_mode = str(btc_mode_row["market_mode"]) if btc_mode_row and btc_mode_row["market_mode"] else "sideways"
+    new_per_cycle_limit = SCALP_MAX_NEW_PER_CYCLE if current_market_mode == "bear_sideways" else MAX_NEW_PER_CYCLE
+
     new_trades = 0
 
     async with aiohttp.ClientSession() as sr_session:
         for symbol in candidates:
-            if new_trades >= MAX_NEW_PER_CYCLE:
+            if new_trades >= new_per_cycle_limit:
                 break
 
             f_row = await db.fetchrow(

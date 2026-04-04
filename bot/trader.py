@@ -451,6 +451,17 @@ def check_entry(
         if market_mode not in ("bear", "bear_sideways"):
             return False, "", f"bad_market_mode_for_short_trend({market_mode})"
 
+        if sr_signal == "retest_broken_support_short":
+            if r_1h > 0.02:
+                return False, "", f"retest_bad_1h({r_1h:.3f})"
+            if r_24h > 0.04:
+                return False, "", f"retest_bad_24h({r_24h:.3f})"
+            if relative_strength > 1.6:
+                return False, "", f"retest_too_strong_asset({relative_strength:.2f})"
+            if rsi < 32:
+                return False, "", f"retest_rsi_too_low({rsi:.1f})"
+            return True, "short", f"entry_ok_retest_short(prob={prob:.1f})"
+
         if sr_signal == "bounce_support":
             return False, "", "short_trend_support_block"
         if r_1h > 0.03:

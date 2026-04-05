@@ -362,7 +362,7 @@ def check_entry(
             if dist_to_support is None or dist_to_support > 2.0:
                 return False, "", f"short_not_in_entry_zone({dist_to_support})"
         else:
-            if dist_to_resistance is None or dist_to_resistance > 2.0:
+            if dist_to_resistance is None or dist_to_resistance > 3.0:
                 return False, "", f"short_not_in_entry_zone({dist_to_resistance})"
 
     if direction == "long":
@@ -370,7 +370,7 @@ def check_entry(
             if dist_to_resistance is None or dist_to_resistance > 0.4:
                 return False, "", f"long_not_in_entry_zone({dist_to_resistance})"
         else:
-            if dist_to_support is None or dist_to_support > 0.4:
+            if dist_to_support is None or dist_to_support > 1.0:
                 return False, "", f"long_not_in_entry_zone({dist_to_support})"
 
     # Слишком экстремальная среда — только для импульсов
@@ -476,7 +476,7 @@ def check_entry(
 
         if sr_signal == "bounce_support":
             return False, "", "short_trend_support_block"
-        if r_1h > 0.03:
+        if r_1h > 0.06:
             return False, "", f"short_trend_bad_1h({r_1h:.3f})"
         if r_24h > 0.03:
             return False, "", f"short_trend_bad_24h({r_24h:.3f})"
@@ -502,7 +502,7 @@ def check_entry(
     if direction == "short":
         if sr_signal == "bounce_support":
             return False, "", "normal_short_support_block"
-        if r_1h > 0.03:
+        if r_1h > 0.06:
             return False, "", f"normal_short_bad_momentum({r_1h:.3f})"
         if rsi < 35:
             return False, "", f"normal_short_rsi_low({rsi:.1f})"

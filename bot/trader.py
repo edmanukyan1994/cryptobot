@@ -351,7 +351,7 @@ def check_entry(
     if prob < min_prob_floor:
         return False, "", f"weak_prob_floor({prob:.1f}<{min_prob_floor:.1f})"
 
-    if volume < 1_000_000:
+    if volume < 700_000:
         return False, "", f"low_volume({volume:.0f})"
 
     if volume_bucket == "trash":
@@ -362,7 +362,7 @@ def check_entry(
             if dist_to_support is None or dist_to_support > 2.0:
                 return False, "", f"short_not_in_entry_zone({dist_to_support})"
         else:
-            if dist_to_resistance is None or dist_to_resistance > 3.0:
+            if dist_to_resistance is None or dist_to_resistance > 4.0:
                 return False, "", f"short_not_in_entry_zone({dist_to_resistance})"
 
     if direction == "long":
@@ -450,7 +450,7 @@ def check_entry(
             return False, "", "short_impulse_blocked_support"
         if relative_strength > 1.3:
             return False, "", f"short_impulse_too_strong_asset({relative_strength:.2f})"
-        if rsi < 32:
+        if rsi < 28:
             return False, "", f"short_impulse_rsi_too_low({rsi:.1f})"
 
         return True, "short", f"entry_ok_short_impulse(prob={prob:.1f})"
@@ -482,7 +482,7 @@ def check_entry(
                 return False, "", f"retest_bad_24h({r_24h:.3f})"
             if relative_strength > 1.6:
                 return False, "", f"retest_too_strong_asset({relative_strength:.2f})"
-            if rsi < 32:
+            if rsi < 28:
                 return False, "", f"retest_rsi_too_low({rsi:.1f})"
             return True, "short", f"entry_ok_retest_short(prob={prob:.1f})"
 
@@ -494,7 +494,7 @@ def check_entry(
             return False, "", f"short_trend_bad_24h({r_24h:.3f})"
         if relative_strength > 1.3:
             return False, "", f"short_trend_too_strong_asset({relative_strength:.2f})"
-        if rsi < 30:
+        if rsi < 26:
             return False, "", f"short_trend_rsi_too_low({rsi:.1f})"
 
         return True, "short", f"entry_ok_short_trend(prob={prob:.1f})"

@@ -185,7 +185,7 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
 
     if direction == "long":
         # LONG SUPPORT (новая логика)
-        if dist_to_support is not None and dist_to_support <= 1.0:
+        if dist_to_support is not None and dist_to_support <= 2.0:
             if rsi <= 55 and volume >= 700_000:
                 if sr_signal in ("bounce_support", "neutral"):
                     return "long_support"
@@ -377,7 +377,7 @@ def check_entry(
             if dist_to_resistance is None or dist_to_resistance > 0.4:
                 return False, "", f"long_not_in_entry_zone({dist_to_resistance})"
         else:
-            if dist_to_support is None or dist_to_support > 1.0:
+            if dist_to_support is None or dist_to_support > 2.0:
                 return False, "", f"long_not_in_entry_zone({dist_to_support})"
 
     # Слишком экстремальная среда — только для импульсов
@@ -417,7 +417,7 @@ def check_entry(
 
     # ---------------- LONG SUPPORT (новая логика: вход у поддержки) ----------------
     if (direction in ("up", "neutral") or rsi <= 25) and market_mode in ("bear_sideways", "sideways"):
-        if dist_to_support is not None and dist_to_support <= 1.0:
+        if dist_to_support is not None and dist_to_support <= 2.0:
             if rsi <= 55 and volume_bucket not in ("trash", "low"):
                 if sr_signal in ("bounce_support", "neutral"):
                     logger.info(f"🟢 LONG SUPPORT: {symbol} dist={dist_to_support:.2f}% RSI={rsi:.1f} vol={volume_bucket}")

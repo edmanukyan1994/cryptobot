@@ -463,6 +463,18 @@ def check_entry(
         if market_mode not in ("bear", "bear_sideways"):
             return False, "", f"bad_market_mode_for_short_trend({market_mode})"
 
+        # Bear режим: более мягкие условия
+        if market_mode == "bear":
+            bear_distance = 4.0
+            bear_rsi = 26
+            bear_r_1h = 0.10
+            bear_volume = 700000
+        else:
+            bear_distance = 2.0
+            bear_rsi = 34
+            bear_r_1h = 0.03
+            bear_volume = 1000000
+
         if sr_signal == "retest_broken_support_short":
             if r_1h > 0.02:
                 return False, "", f"retest_bad_1h({r_1h:.3f})"

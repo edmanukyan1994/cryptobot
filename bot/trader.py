@@ -476,13 +476,13 @@ def check_entry(
 
         if sr_signal == "bounce_support":
             return False, "", "short_trend_support_block"
-        if r_1h > 0.06:
+        if r_1h > 0.08:
             return False, "", f"short_trend_bad_1h({r_1h:.3f})"
         if r_24h > 0.03:
             return False, "", f"short_trend_bad_24h({r_24h:.3f})"
         if relative_strength > 1.3:
             return False, "", f"short_trend_too_strong_asset({relative_strength:.2f})"
-        if rsi < 34:
+        if rsi < 30:
             return False, "", f"short_trend_rsi_too_low({rsi:.1f})"
 
         return True, "short", f"entry_ok_short_trend(prob={prob:.1f})"
@@ -502,7 +502,7 @@ def check_entry(
     if direction == "short":
         if sr_signal == "bounce_support":
             return False, "", "normal_short_support_block"
-        if r_1h > 0.06:
+        if r_1h > 0.08:
             return False, "", f"normal_short_bad_momentum({r_1h:.3f})"
         if rsi < 35:
             return False, "", f"normal_short_rsi_low({rsi:.1f})"

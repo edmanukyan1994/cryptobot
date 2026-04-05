@@ -185,7 +185,7 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
     if direction == "long":
         if (
             reversal_score >= 2
-            and (rsi <= 40 or sr_signal in ("bounce_support", "retest_broken_resistance_long"))
+            # and (rsi <= 40 or sr_signal in ("bounce_support", "retest_broken_resistance_long"))
             and volume >= 1_000_000
         ):
             return "long_reversal"
@@ -451,7 +451,7 @@ def check_entry(
         if relative_strength > 1.3:
             return False, "", f"short_impulse_too_strong_asset({relative_strength:.2f})"
         if rsi < 28:
-            return False, "", f"short_impulse_rsi_too_low({rsi:.1f})"
+        # return False, "", f"short_impulse_rsi_too_low({rsi:.1f})"  # временно отключено
 
         return True, "short", f"entry_ok_short_impulse(prob={prob:.1f})"
 
@@ -495,7 +495,7 @@ def check_entry(
         if relative_strength > 1.3:
             return False, "", f"short_trend_too_strong_asset({relative_strength:.2f})"
         if rsi < 32:
-            return False, "", f"short_trend_rsi_too_low({rsi:.1f})"
+        # return False, "", f"short_trend_rsi_too_low({rsi:.1f})"  # временно отключено
 
         return True, "short", f"entry_ok_short_trend(prob={prob:.1f})"
 

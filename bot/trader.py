@@ -494,7 +494,7 @@ def check_entry(
             return False, "", f"short_trend_bad_24h({r_24h:.3f})"
         if relative_strength > 1.3:
             return False, "", f"short_trend_too_strong_asset({relative_strength:.2f})"
-        if rsi < 26:
+        if rsi < 32:
             return False, "", f"short_trend_rsi_too_low({rsi:.1f})"
 
         return True, "short", f"entry_ok_short_trend(prob={prob:.1f})"

@@ -416,7 +416,7 @@ def check_entry(
 
 
     # ---------------- LONG SUPPORT (новая логика: вход у поддержки) ----------------
-    if direction in ("up", "neutral") and market_mode in ("bear_sideways", "sideways"):
+    if (direction in ("up", "neutral") or rsi <= 25) and market_mode in ("bear_sideways", "sideways"):
         if dist_to_support is not None and dist_to_support <= 1.0:
             if rsi <= 55 and volume_bucket not in ("trash", "low"):
                 if sr_signal in ("bounce_support", "neutral"):
@@ -516,7 +516,7 @@ def check_entry(
 
     # ---------------- FALLBACK NORMAL ----------------
     if direction == "long":
-        if market_mode == "bear" and regime == "crash":
+        if market_mode == "bear" and regime == "crash_old":
             return False, "", "blocked_long_in_crash"
         if r_1h < -0.01:
             return False, "", f"normal_long_bad_momentum({r_1h:.3f})"

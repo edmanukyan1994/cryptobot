@@ -39,6 +39,7 @@ def normalize_setup_type(setup_type: str) -> str:
         "long_impulse": "long_impulse",
         "long_reversal": "long_reversal",
         "long_trend": "long_trend",
+        "long_support": "long_support",
         "short_trend": "short_trend",
         "normal": "normal",
         "": "normal",
@@ -183,6 +184,12 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
             return "short_trend"
 
     if direction == "long":
+        # LONG SUPPORT (новая логика)
+        if dist_to_support is not None and dist_to_support <= 1.0:
+            if rsi <= 55 and volume >= 700_000:
+                if sr_signal in ("bounce_support", "neutral"):
+                    return "long_support"
+
         if (
             reversal_score >= 2
             and (rsi <= 40 or sr_signal in ("bounce_support", "retest_broken_resistance_long"))
@@ -395,7 +402,7 @@ def check_entry(
 
     # ---------------- LONG REVERSAL ----------------
     if setup_type == "long_reversal":
-        return False, "", "long_reversal_disabled_temp" 
+        return False, "", "long_reversal_disabled_temp"
 
     # === СПЕЦИАЛЬНОЕ ИСКЛЮЧЕНИЕ: Long Reversal в bear market при экстремальной перепроданности ===
     if direction == "long" and (market_mode in ("bear", "bear_sideways") or regime == "crash"):
@@ -407,6 +414,14 @@ def check_entry(
             logger.info(f"🔥 EXTREME LONG REVERSAL ALLOWED: {symbol} RSI={rsi_val:.1f} dist={dist_val:.2f}% vol={vol_bucket}")
             return True, "long", f"long_reversal_extreme(rsi={rsi_val:.1f},dist={dist_val:.2f})"
 
+
+    # ---------------- LONG SUPPORT (новая логика: вход у поддержки) ----------------
+    if direction in ("up", "neutral") and market_mode in ("bear_sideways", "sideways"):
+        if dist_to_support is not None and dist_to_support <= 1.0:
+            if rsi <= 55 and volume_bucket not in ("trash", "low"):
+                if sr_signal in ("bounce_support", "neutral"):
+                    logger.info(f"🟢 LONG SUPPORT: {symbol} dist={dist_to_support:.2f}% RSI={rsi:.1f} vol={volume_bucket}")
+                    return True, "long", f"long_support(dist={dist_to_support:.2f},rsi={rsi:.1f})"
 
     # ---------------- LONG TREND ----------------
     if setup_type == "long_trend":
@@ -440,7 +455,7 @@ def check_entry(
             if relative_strength > 0:
                 return False, "", f"short_impulse_asset_not_weak_enough({relative_strength:.2f})"
             if sr_signal not in ("bounce_resistance", "retest_broken_support_short"):
-                return False, "", f"short_impulse_needs_resistance({sr_signal})"    
+                return False, "", f"short_impulse_needs_resistance({sr_signal})"
 
         if impulse_score < 3:
             return False, "", f"weak_impulse_score({impulse_score})"

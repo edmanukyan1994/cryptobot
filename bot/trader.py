@@ -415,13 +415,12 @@ def check_entry(
             return True, "long", f"long_reversal_extreme(rsi={rsi_val:.1f},dist={dist_val:.2f})"
 
 
-    # ---------------- LONG SUPPORT (новая логика: вход у поддержки) ----------------
-    if (direction in ("up", "neutral") or rsi <= 25) and market_mode in ("bear_sideways", "sideways"):
+    # ---------------- LONG SUPPORT (упрощённая логика) ----------------
+    if market_mode in ("bear_sideways", "sideways"):
         if dist_to_support is not None and dist_to_support <= 2.0:
-            if rsi <= 55 and volume_bucket not in ("trash", "low"):
-                if sr_signal in ("bounce_support", "neutral"):
-                    logger.info(f"🟢 LONG SUPPORT: {symbol} dist={dist_to_support:.2f}% RSI={rsi:.1f} vol={volume_bucket}")
-                    return True, "long", f"long_support(dist={dist_to_support:.2f},rsi={rsi:.1f})"
+            if volume_bucket not in ("trash", "low"):
+                logger.info(f"🟢 LONG SUPPORT: {symbol} dist={dist_to_support:.2f}% vol={volume_bucket}")
+                return True, "long", f"long_support(dist={dist_to_support:.2f})"
 
     # ---------------- LONG TREND ----------------
     if setup_type == "long_trend":

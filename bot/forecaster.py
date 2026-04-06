@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from config import FORECAST_INTERVAL
 import db
+import ml_client
 from market_context import get_context
 
 logger = logging.getLogger("forecaster")
@@ -482,7 +483,15 @@ async def forecast_symbol(symbol: str, features: dict) -> list:
             }
             bull_total = sum(v[0] * BASE_WEIGHTS.get(k, 0.05) * w.get(k, 1.0) for k, v in scores.items()) * env_penalty
             bear_total = sum(v[1] * BASE_WEIGHTS.get(k, 0.05) * w.get(k, 1.0) for k, v in scores.items()) * env_penalty
-            direction, prob, conf = calc_probability(bull_total, bear_total)
+                # Пробуем получить прогноз от ML-агента
+    ml_pred = await ml_client.get_ml_prediction(features)
+    if ml_pred and ml_pred.get("direction_probability", 0) > 55:
+        direction = ml_pred["direction"]
+        prob = ml_pred["direction_probability"]
+        conf = ml_pred.get("confidence", 50)
+        logger.info(f"ML prediction for {symbol}: {direction} ({prob:.1f}%)")
+    else:
+        direction, prob, conf = calc_probability(bull_total, bear_total)
             if direction == "down" and market_mode == "bull":
                 prob = max(50.0, prob - 6.0)
                 conf = max(50.0, conf - 6.0)

@@ -484,6 +484,7 @@ async def forecast_symbol(symbol: str, features: dict) -> list:
             bull_total = sum(v[0] * BASE_WEIGHTS.get(k, 0.05) * w.get(k, 1.0) for k, v in scores.items()) * env_penalty
             bear_total = sum(v[1] * BASE_WEIGHTS.get(k, 0.05) * w.get(k, 1.0) for k, v in scores.items()) * env_penalty
                 # Пробуем получить прогноз от ML-агента
+    # Пробуем получить прогноз от ML-агента
     ml_pred = await ml_client.get_ml_prediction(features)
     if ml_pred and ml_pred.get("direction_probability", 0) > 55:
         direction = ml_pred["direction"]

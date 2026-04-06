@@ -352,33 +352,38 @@ def check_entry(
     except Exception:
         dist_to_resistance = None
 
-    # Probability больше не главный фильтр входа.
-    # Она только отсекает совсем мусорные прогнозы.
+    # ============================================================
+    # НОВАЯ СИСТЕМА ВЕСОВ (SCORING)
+    # ============================================================
+    # Сначала пробуем scoring систему
+    scoring_should, scoring_score, scoring_reason = await scoring.should_enter(features, forecast, market_mode, direction)
+    
+    if scoring_should:
+        logger.info(f"SCORING PASS: {symbol} direction={direction} score={scoring_score} reason={scoring_reason}")
+        # Если scoring одобрил, пропускаем дальше к проверкам setup_type
+        pass
+    else:
+        # Если scoring не одобрил, но это экстремальный случай — можно войти
+        rsi_val = features.get("rsi_14") or 50
+        dist_val = dist_to_support if direction == "long" else dist_to_resistance
+        
+        if rsi_val <= 20 and dist_val is not None and dist_val <= 0.5:
+            logger.info(f"EXTREME SCORING BYPASS: {symbol} RSI={rsi_val:.1f} dist={dist_val:.2f}")
+        else:
+            return False, "", f"scoring_reject({scoring_reason})"
+    
+    # ============================================================
+    # СТАРЫЕ ПРОВЕРКИ (FALLBACK) - только минимальные фильтры
+    # ============================================================
     min_prob_floor = float(params.get("min_prob_floor") or 55.0)
     if prob < min_prob_floor:
         return False, "", f"weak_prob_floor({prob:.1f}<{min_prob_floor:.1f})"
 
-    if volume < 700_000:
+    if volume < 500_000:
         return False, "", f"low_volume({volume:.0f})"
 
     if volume_bucket == "trash":
         return False, "", "trash_liquidity"
-
-    if direction == "short":
-        if sr_signal == "retest_broken_support_short":
-            if dist_to_support is None or dist_to_support > 2.0:
-                return False, "", f"short_not_in_entry_zone({dist_to_support})"
-        else:
-            if dist_to_resistance is None or dist_to_resistance > 4.0:
-                return False, "", f"short_not_in_entry_zone({dist_to_resistance})"
-
-    if direction == "long":
-        if sr_signal == "retest_broken_resistance_long":
-            if dist_to_resistance is None or dist_to_resistance > 0.4:
-                return False, "", f"long_not_in_entry_zone({dist_to_resistance})"
-        else:
-            if dist_to_support is None or dist_to_support > 2.0:
-                return False, "", f"long_not_in_entry_zone({dist_to_support})"
 
     # Слишком экстремальная среда — только для импульсов
     if volatility_bucket == "extreme" and setup_type not in ("short_impulse", "long_impulse"):

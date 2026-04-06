@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 
 from config import FORECAST_INTERVAL
 import db
-import ml_client
 from market_context import get_context
 
 logger = logging.getLogger("forecaster")

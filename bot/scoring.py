@@ -301,9 +301,9 @@ async def calculate_score(features: dict, direction: str, market_mode: str, ml_f
         ml_dir = ml_forecast.get("direction")
         ml_prob = float(ml_forecast.get("direction_probability") or 0)
         if direction == "long" and ml_dir == "up":
-            ml_score = int(ml_prob * 0.2 * 100)  # до 20 баллов
+            ml_score = int(ml_prob * 0.2)  # до 20 баллов
         elif direction == "short" and ml_dir == "down":
-            ml_score = int(ml_prob * 0.2 * 100)
+            ml_score = int(ml_prob * 0.2)
         elif ml_dir and ml_dir != direction:
             ml_score = -15  # штраф за противоречие
     scores["ml_signal"] = ml_score

@@ -28,7 +28,11 @@ async def get_weights() -> dict:
     try:
         row = await db.fetchrow("SELECT weights, entry_threshold FROM crypto_scoring_weights WHERE id='current'")
         if row:
+            import json as _json
             raw_weights = row["weights"]
+            # weights может прийти как строка JSON или как dict
+            if isinstance(raw_weights, str):
+                raw_weights = _json.loads(raw_weights)
             weights_float = {k: float(v) for k, v in raw_weights.items()}
             _weights_cache = {
                 "weights": weights_float,

@@ -194,3 +194,109 @@ def _score_market_mode(market_mode: str, is_long: bool) -> int:
         elif market_mode == "bull":          return 0
     return 0
 
+
+
+async def calculate_score(features: dict, direction: str, market_mode: str, ml_forecast: dict = None) -> int:
+    is_long = direction == "long"
+    weights_data = await get_weights()
+    weights = weights_data["weights"]
+
+    def _f(v):
+        try: return float(v) if v is not None else None
+        except: return None
+
+    dist = _f(features.get("distance_to_support_pct") if is_long else features.get("distance_to_resistance_pct"))
+    rsi = _f(features.get("rsi_14"))
+    r_1h = _f(features.get("r_1h"))
+    r_24h = _f(features.get("r_24h"))
+    volume_bucket = features.get("volume_bucket") or "low"
+    sr_signal = features.get("sr_signal") or "neutral"
+    rs = _f(features.get("relative_strength"))
+
+    scores = {
+        "distance": _score_distance(dist, is_long),
+        "rsi": _score_rsi(rsi, is_long),
+        "momentum_1h": _score_momentum_1h(r_1h, is_long),
+        "momentum_24h": _score_momentum_24h(r_24h, is_long),
+        "volume": _score_volume(volume_bucket),
+        "sr_signal": _score_sr_signal(sr_signal, is_long),
+        "relative_strength": _score_relative_strength(rs, is_long),
+        "market_mode": _score_market_mode(market_mode, is_long),
+    }
+
+    ml_score = 0
+    if ml_forecast:
+        ml_dir = ml_forecast.get("direction")
+        ml_prob = float(ml_forecast.get("direction_probability") or 0)
+        if direction == "long" and ml_dir in ("up", "long"):
+            ml_score = int(ml_prob * 0.2)
+        elif direction == "short" and ml_dir in ("down", "short"):
+            ml_score = int(ml_prob * 0.2)
+        elif ml_dir and ml_dir not in ("neutral", None):
+            ml_score = -15
+    scores["ml_signal"] = ml_score
+
+    total_score = sum(float(score) * float(weights.get(factor, 0.05)) for factor, score in scores.items())
+    final_score = min(100, max(0, int(total_score)))
+    logger.debug(f"Score {direction}: {final_score} | factors={scores}")
+    return final_score
+
+
+async def should_enter_long(features: dict, forecast: dict, market_mode: str) -> tuple:
+    from ml_client import get_ml_prediction
+    ml_prediction = await get_ml_prediction(features)
+    score = await calculate_score(features, "long", market_mode, ml_forecast=ml_prediction)
+    threshold = await get_entry_threshold()
+
+    rsi = float(features.get("rsi_14")) if features.get("rsi_14") is not None else None
+    dist = float(features.get("distance_to_support_pct")) if features.get("distance_to_support_pct") is not None else None
+    volume_bucket = features.get("volume_bucket") or "low"
+
+    if rsi is not None and rsi <= 20 and dist is not None and dist <= 0.5:
+        if volume_bucket not in ("trash", "low"):
+            return True, score, f"extreme_oversold_rsi={rsi:.1f}_dist={dist:.2f}"
+
+    ml_dir = (ml_prediction or {}).get("direction")
+    ml_prob = float((ml_prediction or {}).get("direction_probability") or 0)
+
+    if ml_dir in ("up", "neutral", None):
+        if ml_prob >= 55 and score >= threshold:
+            return True, score, f"score={score}_prob={ml_prob:.0f}"
+        elif score >= threshold + 15:
+            return True, score, f"high_score_only={score}"
+
+    return False, score, f"score={score}<{threshold}_or_dir={ml_dir}"
+
+
+async def should_enter_short(features: dict, forecast: dict, market_mode: str) -> tuple:
+    from ml_client import get_ml_prediction
+    ml_prediction = await get_ml_prediction(features)
+    score = await calculate_score(features, "short", market_mode, ml_forecast=ml_prediction)
+    threshold = await get_entry_threshold()
+
+    rsi = float(features.get("rsi_14")) if features.get("rsi_14") is not None else None
+    dist = float(features.get("distance_to_resistance_pct")) if features.get("distance_to_resistance_pct") is not None else None
+    volume_bucket = features.get("volume_bucket") or "low"
+
+    if rsi is not None and rsi >= 80 and dist is not None and dist <= 0.5:
+        if volume_bucket not in ("trash", "low"):
+            return True, score, f"extreme_overbought_rsi={rsi:.1f}_dist={dist:.2f}"
+
+    ml_dir = (ml_prediction or {}).get("direction")
+    ml_prob = float((ml_prediction or {}).get("direction_probability") or 0)
+
+    if ml_dir in ("down", "neutral", None):
+        if ml_prob >= 55 and score >= threshold:
+            return True, score, f"score={score}_prob={ml_prob:.0f}"
+        elif score >= threshold + 15:
+            return True, score, f"high_score_only={score}"
+
+    return False, score, f"score={score}<{threshold}_or_dir={ml_dir}"
+
+
+async def should_enter(features: dict, forecast: dict, market_mode: str, direction: str) -> tuple:
+    if direction == "long":
+        return await should_enter_long(features, forecast, market_mode)
+    elif direction == "short":
+        return await should_enter_short(features, forecast, market_mode)
+    return False, 0, f"invalid_direction={direction}"

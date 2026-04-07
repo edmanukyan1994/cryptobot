@@ -37,7 +37,7 @@ async def get_weights() -> dict:
     except Exception as e:
         logger.warning(f"Failed to load scoring weights from DB: {e}")
     
-    # Fallback веса
+    # Fallback веса (добавлен ml_signal)
     return {
         "weights": {
             "distance": 0.20,
@@ -48,6 +48,7 @@ async def get_weights() -> dict:
             "sr_signal": 0.15,
             "relative_strength": 0.10,
             "market_mode": 0.10,
+            "ml_signal": 0.15,
         },
         "entry_threshold": 50,
     }
@@ -252,10 +253,11 @@ def _score_market_mode(market_mode: str, is_long: bool) -> int:
     return 0
 
 
-async def calculate_score(features: dict, direction: str, market_mode: str) -> int:
+async def calculate_score(features: dict, direction: str, market_mode: str, ml_forecast: dict = None) -> int:
     """
     Рассчитывает score для входа.
     direction: 'long' или 'short'
+    ml_forecast: прогноз от ML (с ключами direction, direction_probability)
     Возвращает число от 0 до 100
     """
     is_long = direction == "long"
@@ -283,6 +285,19 @@ async def calculate_score(features: dict, direction: str, market_mode: str) -> i
         "market_mode": _score_market_mode(market_mode, is_long),
     }
     
+    # ML фактор
+    ml_score = 0
+    if ml_forecast:
+        ml_dir = ml_forecast.get("direction")
+        ml_prob = ml_forecast.get("direction_probability", 0)
+        if direction == "long" and ml_dir == "up":
+            ml_score = int(ml_prob * 0.2 * 100)  # до 20 баллов
+        elif direction == "short" and ml_dir == "down":
+            ml_score = int(ml_prob * 0.2 * 100)
+        elif ml_dir and ml_dir != direction:
+            ml_score = -15  # штраф за противоречие
+    scores["ml_signal"] = ml_score
+    
     # Применяем веса
     total_score = 0
     for factor, score in scores.items():
@@ -302,7 +317,7 @@ async def should_enter_long(features: dict, forecast: dict, market_mode: str) ->
     direction = forecast.get("direction")
     prob = forecast.get("direction_probability", 0)
     
-    score = await calculate_score(features, "long", market_mode)
+    score = await calculate_score(features, "long", market_mode, ml_forecast=forecast)
     threshold = await get_entry_threshold()
     
     rsi = features.get("rsi_14")
@@ -329,7 +344,7 @@ async def should_enter_short(features: dict, forecast: dict, market_mode: str) -
     direction = forecast.get("direction")
     prob = forecast.get("direction_probability", 0)
     
-    score = await calculate_score(features, "short", market_mode)
+    score = await calculate_score(features, "short", market_mode, ml_forecast=forecast)
     threshold = await get_entry_threshold()
     
     rsi = features.get("rsi_14")

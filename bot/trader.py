@@ -9,6 +9,7 @@ import db
 import telegram_bot as tg
 from forecaster import get_latest_forecast
 from sr_engine import analyze_sr, get_sr_entry_signal, update_features_sr
+import scoring
 
 logger = logging.getLogger("trader")
 
@@ -169,6 +170,7 @@ def detect_setup_type(features: dict, forecast: dict) -> str:
     impulse_score = int(features.get("impulse_score") or 0)
     reversal_score = int(features.get("reversal_score") or 0)
     market_mode = str(features.get("market_mode") or "sideways")
+    dist_to_support = features.get("distance_to_support_pct")
 
     if direction == "short":
         if (
@@ -261,6 +263,7 @@ def detect_market_mode(features: dict, forecast: dict) -> str:
 
     return "sideways"
 
+
 def btc_move_allows_entry(
     setup_type: str,
     market_mode: str,
@@ -306,14 +309,14 @@ def btc_move_allows_entry(
     return True, "ok"
 
 
-
-def check_entry(
+async def check_entry(
     features: dict,
     forecast: dict,
     params: dict,
     setup_type: str = "normal",
     market_mode: str = "sideways",
 ) -> tuple[bool, str, str]:
+    """Новая версия: только минимальные фильтры + скоринг"""
     if not forecast:
         return False, "", "no_data"
 
@@ -326,55 +329,11 @@ def check_entry(
     if not direction:
         return False, "", "neutral_forecast"
 
-    setup_type = normalize_setup_type(setup_type)
-
-    regime = str(features.get("regime") or "")
-    r_1h = float(features.get("r_1h") or 0)
-    r_24h = float(features.get("r_24h") or 0)
-    rsi = float(features.get("rsi_14") or 50)
-    sr_signal = str(features.get("sr_signal") or "")
     volume = float(features.get("volume_24h") or 0)
     volume_bucket = str(features.get("volume_bucket") or volume_to_bucket(volume))
     volatility_bucket = str(features.get("volatility_bucket") or "unknown")
-    relative_strength = float(features.get("relative_strength") or 0)
-    impulse_score = int(features.get("impulse_score") or 0)
-    reversal_score = int(features.get("reversal_score") or 0)
-    dist_to_support = features.get("distance_to_support_pct")
-    dist_to_resistance = features.get("distance_to_resistance_pct")
 
-    try:
-        dist_to_support = float(dist_to_support) if dist_to_support is not None else None
-    except Exception:
-        dist_to_support = None
-
-    try:
-        dist_to_resistance = float(dist_to_resistance) if dist_to_resistance is not None else None
-    except Exception:
-        dist_to_resistance = None
-
-    # ============================================================
-    # НОВАЯ СИСТЕМА ВЕСОВ (SCORING)
-    # ============================================================
-    # Сначала пробуем scoring систему
-    scoring_should, scoring_score, scoring_reason = await scoring.should_enter(features, forecast, market_mode, direction)
-    
-    if scoring_should:
-        logger.info(f"SCORING PASS: {symbol} direction={direction} score={scoring_score} reason={scoring_reason}")
-        # Если scoring одобрил, пропускаем дальше к проверкам setup_type
-        pass
-    else:
-        # Если scoring не одобрил, но это экстремальный случай — можно войти
-        rsi_val = features.get("rsi_14") or 50
-        dist_val = dist_to_support if direction == "long" else dist_to_resistance
-        
-        if rsi_val <= 20 and dist_val is not None and dist_val <= 0.5:
-            logger.info(f"EXTREME SCORING BYPASS: {symbol} RSI={rsi_val:.1f} dist={dist_val:.2f}")
-        else:
-            return False, "", f"scoring_reject({scoring_reason})"
-    
-    # ============================================================
-    # СТАРЫЕ ПРОВЕРКИ (FALLBACK) - только минимальные фильтры
-    # ============================================================
+    # Минимальные фильтры (безопасность)
     min_prob_floor = float(params.get("min_prob_floor") or 55.0)
     if prob < min_prob_floor:
         return False, "", f"weak_prob_floor({prob:.1f}<{min_prob_floor:.1f})"
@@ -385,161 +344,18 @@ def check_entry(
     if volume_bucket == "trash":
         return False, "", "trash_liquidity"
 
-    # Слишком экстремальная среда — только для импульсов
-    if volatility_bucket == "extreme" and setup_type not in ("short_impulse", "long_impulse"):
-        return False, "", "extreme_volatility_non_impulse"
+    if volatility_bucket == "extreme":
+        return False, "", "extreme_volatility"
 
-    # ---------------- LONG IMPULSE ----------------
-    if setup_type == "long_impulse":
-        if direction != "long":
-            return False, "", "setup_dir_mismatch"
-        if impulse_score < 3:
-            return False, "", f"weak_impulse_score({impulse_score})"
-        if r_1h < 0.02:
-            return False, "", f"weak_long_impulse_momentum({r_1h:.3f})"
-        if relative_strength < 1.0:
-            return False, "", f"weak_relative_strength({relative_strength:.2f})"
-        if sr_signal == "bounce_resistance":
-            return False, "", "long_impulse_blocked_resistance"
-        if rsi >= 78:
-            return False, "", f"long_impulse_rsi_too_high({rsi:.1f})"
-        return True, "long", f"entry_ok_long_impulse(prob={prob:.1f})"
+    # Основное решение через скоринг
+    scoring_should, scoring_score, scoring_reason = await scoring.should_enter(
+        features, forecast, market_mode, direction
+    )
+    if not scoring_should:
+        return False, "", f"scoring_reject({scoring_reason})"
 
-    # ---------------- LONG REVERSAL ----------------
-    if setup_type == "long_reversal":
-        return False, "", "long_reversal_disabled_temp"
-
-    # === СПЕЦИАЛЬНОЕ ИСКЛЮЧЕНИЕ: Long Reversal в bear market при экстремальной перепроданности ===
-    if direction == "long" and (market_mode in ("bear", "bear_sideways") or regime == "crash"):
-        rsi_val = rsi if rsi is not None else 50.0
-        dist_val = dist_to_support if dist_to_support is not None else 999.0
-        vol_bucket = str(volume_bucket or "unknown")
-        
-        if rsi_val <= 30 and dist_val <= 1.5 and vol_bucket not in ("trash", "low"):
-            logger.info(f"🔥 EXTREME LONG REVERSAL ALLOWED: {symbol} RSI={rsi_val:.1f} dist={dist_val:.2f}% vol={vol_bucket}")
-            return True, "long", f"long_reversal_extreme(rsi={rsi_val:.1f},dist={dist_val:.2f})"
-
-
-    # ---------------- LONG SUPPORT (упрощённая логика) ----------------
-    if market_mode in ("bear_sideways", "sideways"):
-        if dist_to_support is not None and dist_to_support <= 2.0:
-            if volume_bucket not in ("trash", "low"):
-                logger.info(f"🟢 LONG SUPPORT: {symbol} dist={dist_to_support:.2f}% vol={volume_bucket}")
-                return True, "long", f"long_support(dist={dist_to_support:.2f})"
-
-    # ---------------- LONG TREND ----------------
-    if setup_type == "long_trend":
-        if direction != "long":
-            return False, "", "setup_dir_mismatch"
-        if market_mode not in ("bull", "bull_sideways", "sideways"):
-            return False, "", f"bad_market_mode_for_long_trend({market_mode})"
-        if r_1h < -0.01:
-            return False, "", f"long_trend_bad_1h({r_1h:.3f})"
-        if r_24h < -0.02:
-            return False, "", f"long_trend_bad_24h({r_24h:.3f})"
-        if sr_signal == "bounce_resistance":
-            return False, "", "long_trend_resistance_block"
-        if relative_strength < -0.5:
-            return False, "", f"long_trend_weak_relative_strength({relative_strength:.2f})"
-        if rsi < 40 or rsi > 76:
-            return False, "", f"long_trend_rsi_bad({rsi:.1f})"
-        return True, "long", f"entry_ok_long_trend(prob={prob:.1f})"
-
-    # ---------------- SHORT IMPULSE ----------------
-    if setup_type == "short_impulse":
-        if direction != "short":
-            return False, "", "setup_dir_mismatch"
-
-        if market_mode not in ("bear", "bear_sideways"):
-            return False, "", f"bad_market_mode_for_short_impulse({market_mode})"
-
-        if market_mode == "bear_sideways":
-            if r_1h > -0.04:
-                return False, "", f"weak_short_impulse_bear_sideways({r_1h:.3f})"
-            if relative_strength > 0:
-                return False, "", f"short_impulse_asset_not_weak_enough({relative_strength:.2f})"
-            if sr_signal not in ("bounce_resistance", "retest_broken_support_short"):
-                return False, "", f"short_impulse_needs_resistance({sr_signal})"
-
-        if impulse_score < 3:
-            return False, "", f"weak_impulse_score({impulse_score})"
-        if r_1h > -0.01:
-            return False, "", f"weak_short_impulse_momentum({r_1h:.3f})"
-        if sr_signal == "bounce_support":
-            return False, "", "short_impulse_blocked_support"
-        if relative_strength > 1.3:
-            return False, "", f"short_impulse_too_strong_asset({relative_strength:.2f})"
-        if rsi < 28:
-            return False, "", f"short_impulse_rsi_too_low({rsi:.1f})"
-
-        return True, "short", f"entry_ok_short_impulse(prob={prob:.1f})"
-
-    # ---------------- SHORT TREND ----------------
-    if setup_type == "short_trend":
-        if direction != "short":
-            return False, "", "setup_dir_mismatch"
-
-        if market_mode not in ("bear", "bear_sideways"):
-            return False, "", f"bad_market_mode_for_short_trend({market_mode})"
-
-        # Bear режим: более мягкие условия
-        if market_mode == "bear":
-            bear_distance = 4.0
-            bear_rsi = 26
-            bear_r_1h = 0.10
-            bear_volume = 700000
-        else:
-            bear_distance = 2.0
-            bear_rsi = 34
-            bear_r_1h = 0.03
-            bear_volume = 1000000
-
-        if sr_signal == "retest_broken_support_short":
-            if r_1h > 0.02:
-                return False, "", f"retest_bad_1h({r_1h:.3f})"
-            if r_24h > 0.04:
-                return False, "", f"retest_bad_24h({r_24h:.3f})"
-            if relative_strength > 1.6:
-                return False, "", f"retest_too_strong_asset({relative_strength:.2f})"
-            if rsi < 28:
-                return False, "", f"retest_rsi_too_low({rsi:.1f})"
-            return True, "short", f"entry_ok_retest_short(prob={prob:.1f})"
-
-        if sr_signal == "bounce_support":
-            return False, "", "short_trend_support_block"
-        if r_1h > 0.08:
-            return False, "", f"short_trend_bad_1h({r_1h:.3f})"
-        if r_24h > 0.03:
-            return False, "", f"short_trend_bad_24h({r_24h:.3f})"
-        if relative_strength > 1.3:
-            return False, "", f"short_trend_too_strong_asset({relative_strength:.2f})"
-        if rsi < 32:
-            return False, "", f"short_trend_rsi_too_low({rsi:.1f})"
-
-        return True, "short", f"entry_ok_short_trend(prob={prob:.1f})"
-
-    # ---------------- FALLBACK NORMAL ----------------
-    if direction == "long":
-        if market_mode == "bear" and regime == "crash_old":
-            return False, "", "blocked_long_in_crash"
-        if r_1h < -0.01:
-            return False, "", f"normal_long_bad_momentum({r_1h:.3f})"
-        if sr_signal == "bounce_resistance":
-            return False, "", "normal_long_resistance_block"
-        if rsi > 72:
-            return False, "", f"normal_long_rsi_high({rsi:.1f})"
-        return True, "long", f"entry_ok_normal_long(prob={prob:.1f})"
-
-    if direction == "short":
-        if sr_signal == "bounce_support":
-            return False, "", "normal_short_support_block"
-        if r_1h > 0.08:
-            return False, "", f"normal_short_bad_momentum({r_1h:.3f})"
-        if rsi < 35:
-            return False, "", f"normal_short_rsi_low({rsi:.1f})"
-        return True, "short", f"entry_ok_normal_short(prob={prob:.1f})"
-
-    return False, "", "no_rule_match"
+    # Если скоринг одобрил — вход разрешён
+    return True, direction, f"scoring({scoring_score})"
 
 
 async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool, str]:
@@ -1127,7 +943,7 @@ async def trading_cycle():
 
             market_mode = detect_market_mode(features, forecast)
             setup_type = detect_setup_type(features, forecast)
-            should, direction, reason = check_entry(features, forecast, params, setup_type, market_mode)
+            should, direction, reason = await check_entry(features, forecast, params, setup_type, market_mode)
 
             if not should:
                 if reason not in ("neutral_forecast", "no_data"):

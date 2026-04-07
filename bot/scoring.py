@@ -265,13 +265,17 @@ async def calculate_score(features: dict, direction: str, market_mode: str, ml_f
     weights = weights_data["weights"]
     
     # Получаем значения из features
-    dist = features.get("distance_to_support_pct") if is_long else features.get("distance_to_resistance_pct")
-    rsi = features.get("rsi_14")
-    r_1h = features.get("r_1h")
-    r_24h = features.get("r_24h")
+    def _f(v):
+        try: return float(v) if v is not None else None
+        except: return None
+
+    dist = _f(features.get("distance_to_support_pct") if is_long else features.get("distance_to_resistance_pct"))
+    rsi = _f(features.get("rsi_14"))
+    r_1h = _f(features.get("r_1h"))
+    r_24h = _f(features.get("r_24h"))
     volume_bucket = features.get("volume_bucket") or "low"
     sr_signal = features.get("sr_signal") or "neutral"
-    rs = features.get("relative_strength")
+    rs = _f(features.get("relative_strength"))
     
     # Считаем очки по каждому фактору
     scores = {

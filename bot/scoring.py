@@ -28,9 +28,11 @@ async def get_weights() -> dict:
     try:
         row = await db.fetchrow("SELECT weights, entry_threshold FROM crypto_scoring_weights WHERE id='current'")
         if row:
+            raw_weights = row["weights"]
+            weights_float = {k: float(v) for k, v in raw_weights.items()}
             _weights_cache = {
-                "weights": row["weights"],
-                "entry_threshold": row["entry_threshold"],
+                "weights": weights_float,
+                "entry_threshold": int(row["entry_threshold"]),
             }
             _weights_cache_time = now
             return _weights_cache

@@ -482,7 +482,7 @@ async def forecast_symbol(symbol: str, features: dict) -> list:
             }
             bull_total = sum(v[0] * BASE_WEIGHTS.get(k, 0.05) * w.get(k, 1.0) for k, v in scores.items()) * env_penalty
             bear_total = sum(v[1] * BASE_WEIGHTS.get(k, 0.05) * w.get(k, 1.0) for k, v in scores.items()) * env_penalty
-                direction, prob, conf = calc_probability(bull_total, bear_total)
+            direction, prob, conf = calc_probability(bull_total, bear_total)
             if direction == "down" and market_mode == "bull":
                 prob = max(50.0, prob - 6.0)
                 conf = max(50.0, conf - 6.0)

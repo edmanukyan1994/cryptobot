@@ -299,7 +299,7 @@ async def calculate_score(features: dict, direction: str, market_mode: str, ml_f
     ml_score = 0
     if ml_forecast:
         ml_dir = ml_forecast.get("direction")
-        ml_prob = ml_forecast.get("direction_probability", 0)
+        ml_prob = float(ml_forecast.get("direction_probability") or 0)
         if direction == "long" and ml_dir == "up":
             ml_score = int(ml_prob * 0.2 * 100)  # до 20 баллов
         elif direction == "short" and ml_dir == "down":
@@ -325,13 +325,13 @@ async def calculate_score(features: dict, direction: str, market_mode: str, ml_f
 async def should_enter_long(features: dict, forecast: dict, market_mode: str) -> Tuple[bool, int, str]:
     """Принимает решение о входе в long позицию."""
     direction = forecast.get("direction")
-    prob = forecast.get("direction_probability", 0)
+    prob = float(forecast.get("direction_probability") or 0)
     
     score = await calculate_score(features, "long", market_mode, ml_forecast=forecast)
     threshold = await get_entry_threshold()
     
-    rsi = features.get("rsi_14")
-    dist = features.get("distance_to_support_pct")
+    rsi = float(features.get("rsi_14")) if features.get("rsi_14") is not None else None
+    dist = float(features.get("distance_to_support_pct")) if features.get("distance_to_support_pct") is not None else None
     volume_bucket = features.get("volume_bucket") or "low"
     
     # Экстремальные условия
@@ -352,13 +352,13 @@ async def should_enter_long(features: dict, forecast: dict, market_mode: str) ->
 async def should_enter_short(features: dict, forecast: dict, market_mode: str) -> Tuple[bool, int, str]:
     """Принимает решение о входе в short позицию."""
     direction = forecast.get("direction")
-    prob = forecast.get("direction_probability", 0)
+    prob = float(forecast.get("direction_probability") or 0)
     
     score = await calculate_score(features, "short", market_mode, ml_forecast=forecast)
     threshold = await get_entry_threshold()
     
-    rsi = features.get("rsi_14")
-    dist = features.get("distance_to_resistance_pct")
+    rsi = float(features.get("rsi_14")) if features.get("rsi_14") is not None else None
+    dist = float(features.get("distance_to_resistance_pct")) if features.get("distance_to_resistance_pct") is not None else None
     volume_bucket = features.get("volume_bucket") or "low"
     
     # Экстремальные условия

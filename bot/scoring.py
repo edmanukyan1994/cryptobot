@@ -67,195 +67,127 @@ async def get_entry_threshold() -> int:
 
 
 def _score_distance(dist: Optional[float], is_long: bool) -> int:
-    """Оценивает расстояние до уровня."""
+    """Оценивает расстояние до уровня (0-100)."""
     if dist is None:
         return 0
-    
-    if dist <= 0.5:
-        return 20
-    elif dist <= 1.0:
-        return 15
-    elif dist <= 2.0:
-        return 10
-    elif dist <= 3.0:
-        return 5
+    if dist <= 0.5:  return 100
+    elif dist <= 1.0: return 75
+    elif dist <= 2.0: return 50
+    elif dist <= 3.0: return 25
     return 0
 
 
 def _score_rsi(rsi: Optional[float], is_long: bool) -> int:
-    """Оценивает RSI."""
+    """Оценивает RSI (0-100)."""
     if rsi is None:
         return 0
-    
     if is_long:
-        if rsi <= 20:
-            return 10
-        elif rsi <= 30:
-            return 7
-        elif rsi <= 40:
-            return 3
-        elif rsi >= 80:
-            return -5
-        elif rsi >= 70:
-            return -3
+        if rsi <= 20:   return 100
+        elif rsi <= 30: return 70
+        elif rsi <= 40: return 30
+        elif rsi >= 80: return -50
+        elif rsi >= 70: return -30
     else:
-        if rsi >= 80:
-            return 10
-        elif rsi >= 70:
-            return 7
-        elif rsi >= 60:
-            return 3
-        elif rsi <= 20:
-            return -5
-        elif rsi <= 30:
-            return -3
+        if rsi >= 80:   return 100
+        elif rsi >= 70: return 70
+        elif rsi >= 60: return 30
+        elif rsi <= 20: return -50
+        elif rsi <= 30: return -30
     return 0
 
 
 def _score_momentum_1h(r_1h: Optional[float], is_long: bool) -> int:
-    """Оценивает импульс за час."""
+    """Оценивает импульс за час (0-100)."""
     if r_1h is None:
         return 0
-    
     if is_long:
-        if r_1h >= 0.5:
-            return 15
-        elif r_1h >= 0.2:
-            return 10
-        elif r_1h >= 0.05:
-            return 5
-        elif r_1h <= -0.5:
-            return -10
-        elif r_1h <= -0.2:
-            return -5
+        if r_1h >= 0.5:   return 100
+        elif r_1h >= 0.2: return 70
+        elif r_1h >= 0.05: return 30
+        elif r_1h <= -0.5: return -70
+        elif r_1h <= -0.2: return -30
     else:
-        if r_1h <= -0.5:
-            return 15
-        elif r_1h <= -0.2:
-            return 10
-        elif r_1h <= -0.05:
-            return 5
-        elif r_1h >= 0.5:
-            return -10
-        elif r_1h >= 0.2:
-            return -5
+        if r_1h <= -0.5:   return 100
+        elif r_1h <= -0.2: return 70
+        elif r_1h <= -0.05: return 30
+        elif r_1h >= 0.5:  return -70
+        elif r_1h >= 0.2:  return -30
     return 0
 
 
 def _score_momentum_24h(r_24h: Optional[float], is_long: bool) -> int:
-    """Оценивает импульс за 24 часа."""
+    """Оценивает импульс за 24 часа (0-100)."""
     if r_24h is None:
         return 0
-    
     if is_long:
-        if r_24h >= 2.0:
-            return 10
-        elif r_24h >= 1.0:
-            return 5
-        elif r_24h <= -3.0:
-            return -10
-        elif r_24h <= -2.0:
-            return -5
+        if r_24h >= 2.0:   return 100
+        elif r_24h >= 1.0: return 50
+        elif r_24h <= -3.0: return -100
+        elif r_24h <= -2.0: return -50
     else:
-        if r_24h <= -2.0:
-            return 10
-        elif r_24h <= -1.0:
-            return 5
-        elif r_24h >= 3.0:
-            return -10
-        elif r_24h >= 2.0:
-            return -5
+        if r_24h <= -2.0:  return 100
+        elif r_24h <= -1.0: return 50
+        elif r_24h >= 3.0:  return -100
+        elif r_24h >= 2.0:  return -50
     return 0
 
 
 def _score_volume(volume_bucket: str) -> int:
-    """Оценивает объём торгов."""
-    if volume_bucket == "ultra":
-        return 10
-    elif volume_bucket == "high":
-        return 7
-    elif volume_bucket == "medium":
-        return 5
-    elif volume_bucket == "low":
-        return 2
-    elif volume_bucket == "trash":
-        return -10
+    """Оценивает объём торгов (0-100)."""
+    if volume_bucket == "ultra":   return 100
+    elif volume_bucket == "high":  return 75
+    elif volume_bucket == "medium": return 50
+    elif volume_bucket == "low":   return 20
+    elif volume_bucket == "trash": return -100
     return 0
 
 
 def _score_sr_signal(sr_signal: str, is_long: bool) -> int:
-    """Оценивает S/R сигнал."""
+    """Оценивает S/R сигнал (0-100)."""
     if is_long:
-        if sr_signal == "bounce_support":
-            return 15
-        elif sr_signal == "breakout_up":
-            return 12
-        elif sr_signal == "retest_broken_resistance_long":
-            return 10
-        elif sr_signal == "breakout_down":
-            return -10
-        elif sr_signal == "bounce_resistance":
-            return -5
+        if sr_signal == "bounce_support":                return 100
+        elif sr_signal == "breakout_up":                 return 80
+        elif sr_signal == "retest_broken_resistance_long": return 60
+        elif sr_signal == "breakout_down":               return -80
+        elif sr_signal == "bounce_resistance":           return -50
     else:
-        if sr_signal == "bounce_resistance":
-            return 15
-        elif sr_signal == "breakout_down":
-            return 12
-        elif sr_signal == "retest_broken_support_short":
-            return 10
-        elif sr_signal == "breakout_up":
-            return -10
-        elif sr_signal == "bounce_support":
-            return -5
+        if sr_signal == "bounce_resistance":             return 100
+        elif sr_signal == "breakout_down":               return 80
+        elif sr_signal == "retest_broken_support_short": return 60
+        elif sr_signal == "breakout_up":                 return -80
+        elif sr_signal == "bounce_support":              return -50
     return 0
 
 
 def _score_relative_strength(rs: Optional[float], is_long: bool) -> int:
-    """Оценивает относительную силу к BTC."""
+    """Оценивает относительную силу к BTC (0-100)."""
     if rs is None:
         return 0
-    
     if is_long:
-        if rs >= 2.0:
-            return 10
-        elif rs >= 1.0:
-            return 7
-        elif rs >= 0.5:
-            return 3
-        elif rs <= -1.0:
-            return -5
-        elif rs <= -0.5:
-            return -3
+        if rs >= 2.0:   return 100
+        elif rs >= 1.0: return 70
+        elif rs >= 0.5: return 30
+        elif rs <= -1.0: return -50
+        elif rs <= -0.5: return -30
     else:
-        if rs <= -2.0:
-            return 10
-        elif rs <= -1.0:
-            return 7
-        elif rs <= -0.5:
-            return 3
-        elif rs >= 1.0:
-            return -5
-        elif rs >= 0.5:
-            return -3
+        if rs <= -2.0:  return 100
+        elif rs <= -1.0: return 70
+        elif rs <= -0.5: return 30
+        elif rs >= 1.0:  return -50
+        elif rs >= 0.5:  return -30
     return 0
 
 
 def _score_market_mode(market_mode: str, is_long: bool) -> int:
-    """Оценивает режим рынка."""
+    """Оценивает режим рынка (0-100)."""
     if is_long:
-        if market_mode in ("bull", "bull_sideways"):
-            return 10
-        elif market_mode == "sideways":
-            return 5
-        elif market_mode in ("bear", "bear_sideways"):
-            return -5
+        if market_mode in ("bull", "bull_sideways"):     return 100
+        elif market_mode == "sideways":                  return 50
+        elif market_mode in ("bear", "bear_sideways"):   return -50
     else:
-        if market_mode in ("bear", "bear_sideways"):
-            return 10
-        elif market_mode == "sideways":
-            return 5
-        elif market_mode in ("bull", "bull_sideways"):
-            return -5
+        if market_mode in ("bear", "bear_sideways"):     return 100
+        elif market_mode == "sideways":                  return 50
+        elif market_mode in ("bull", "bull_sideways"):   return -50
     return 0
 
 
@@ -301,9 +233,9 @@ async def calculate_score(features: dict, direction: str, market_mode: str, ml_f
         ml_dir = ml_forecast.get("direction")
         ml_prob = float(ml_forecast.get("direction_probability") or 0)
         if direction == "long" and ml_dir == "up":
-            ml_score = int(ml_prob * 0.2)  # до 20 баллов
+            ml_score = int(ml_prob)  # 0-100 баллов
         elif direction == "short" and ml_dir == "down":
-            ml_score = int(ml_prob * 0.2)
+            ml_score = int(ml_prob)
         elif ml_dir and ml_dir != direction:
             ml_score = -15  # штраф за противоречие
     scores["ml_signal"] = ml_score

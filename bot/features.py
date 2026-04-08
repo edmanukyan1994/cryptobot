@@ -493,7 +493,7 @@ async def build_features(session, symbol: str):
                 r = fn(*args)
                 all_levels += r.get("supports", []) + r.get("resistances", [])
 
-            sr_result = calc_confluence(all_levels, current)
+            sr_result = calc_confluence(all_levels, current, candles=klines)
             sup = sr_result["nearest_support"]["price"] if sr_result["nearest_support"] else None
             res = sr_result["nearest_resistance"]["price"] if sr_result["nearest_resistance"] else None
             sr_sig = sr_result["signal"]

@@ -214,16 +214,16 @@ async def calculate_score(features: dict, direction: str, market_mode: str, ml_f
     rs = _f(features.get("relative_strength"))
 
     scores = {
-        "distance": _score_distance(dist, is_long),
-        "rsi": _score_rsi(rsi, is_long),
-        "momentum_1h": _score_momentum_1h(r_1h, is_long),
-        "momentum_24h": _score_momentum_24h(r_24h, is_long),
-        "volume": _score_volume(volume_bucket),
-        "sr_signal": _score_sr_signal(sr_signal, is_long),
+        "distance":          _score_distance(dist, is_long),
+        "rsi":               _score_rsi(rsi, is_long),
+        "momentum_1h":       _score_momentum_1h(r_1h, is_long),
+        "momentum_24h":      _score_momentum_24h(r_24h, is_long),
+        "volume":            _score_volume(volume_bucket),
+        "sr_signal":         _score_sr_signal(sr_signal, is_long),
         "relative_strength": _score_relative_strength(rs, is_long),
-        "market_mode": _score_market_mode(market_mode, is_long),
     }
 
+    # ML фактор
     ml_score = 0
     if ml_forecast:
         ml_dir = ml_forecast.get("direction")
@@ -236,9 +236,25 @@ async def calculate_score(features: dict, direction: str, market_mode: str, ml_f
             ml_score = -15
     scores["ml_signal"] = ml_score
 
-    total_score = sum(float(score) * float(weights.get(factor, 0.05)) for factor, score in scores.items())
-    final_score = min(100, max(0, int(total_score)))
-    logger.debug(f"Score {direction}: {final_score} | factors={scores}")
+    # Базовый скор (без market_mode)
+    base_score = sum(float(score) * float(weights.get(factor, 0.0)) for factor, score in scores.items())
+
+    # market_mode как мультипликатор
+    if is_long:
+        if market_mode == "bull":            mult = 1.2
+        elif market_mode == "bull_sideways": mult = 1.1
+        elif market_mode == "sideways":      mult = 1.0
+        elif market_mode == "bear_sideways": mult = 0.9
+        else:                                mult = 0.8
+    else:
+        if market_mode == "bear":            mult = 1.2
+        elif market_mode == "bear_sideways": mult = 1.1
+        elif market_mode == "sideways":      mult = 1.0
+        elif market_mode == "bull_sideways": mult = 0.9
+        else:                                mult = 0.8
+
+    final_score = min(100, max(0, int(base_score * mult)))
+    logger.debug(f"Score {direction}: {final_score} (base={base_score:.1f} mult={mult}) | factors={scores}")
     return final_score
 
 

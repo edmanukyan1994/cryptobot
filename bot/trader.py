@@ -354,7 +354,22 @@ async def check_entry(
     if not scoring_should:
         return False, "", f"scoring_reject({scoring_reason})"
 
-    # Если скоринг одобрил — вход разрешён
+    sr_signal = str(features.get("sr_signal") or "neutral")
+    r_1h = float(features.get("r_1h") or 0)
+
+    # В боковике — только от S/R уровней
+    if market_mode in ("bear_sideways", "bull_sideways"):
+        if direction == "short" and sr_signal != "bounce_resistance":
+            return False, "", f"sideways_needs_resistance(sr={sr_signal})"
+        if direction == "long" and sr_signal not in ("bounce_support", "breakout_up"):
+            return False, "", f"sideways_needs_support(sr={sr_signal})"
+
+    # В сильном тренде — только импульсный вход
+    if market_mode == "bear" and direction == "short" and r_1h > -0.3:
+        return False, "", f"bear_needs_impulse(r_1h={r_1h:.3f})"
+    if market_mode == "bull" and direction == "long" and r_1h < 0.3:
+        return False, "", f"bull_needs_impulse(r_1h={r_1h:.3f})"
+
     return True, direction, f"scoring({scoring_score})"
 
 

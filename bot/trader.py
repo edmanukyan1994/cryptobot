@@ -904,9 +904,7 @@ async def trading_cycle():
     balance = float(account["current_balance"])
     initial = float(account["initial_balance"])
     dd_pct = (initial - balance) / initial * 100 if initial > 0 else 0
-    if dd_pct >= float(params.get("daily_drawdown_limit") or 5):
-        logger.warning(f"Daily drawdown {dd_pct:.1f}% — no new entries")
-        return
+    logger.info(f"Drawdown: {dd_pct:.1f}% | balance=${balance:,.0f}")
 
     logger.info("Cycle before fear&greed fetch")
     fg_row = await db.fetchrow("SELECT value FROM crypto_fear_greed WHERE id='latest'")

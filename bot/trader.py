@@ -276,7 +276,8 @@ def btc_move_allows_entry(
     btc_mom = str(btc_momentum or "").lower()
 
     if st == "long_reversal":
-        return False, "long_reversal_disabled_temp"
+        if btc_mom == "strong_down":
+            return False, "btc_strong_down_block_reversal"
 
     if st == "long_impulse":
         if btc_mom == "strong_down":

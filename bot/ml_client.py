@@ -8,7 +8,7 @@ from typing import Optional, Dict, Any
 
 logger = logging.getLogger("ml_client")
 
-ML_AGENT_URL = "https://ml-agent-production-591a.up.railway.app"
+ML_AGENT_URL = "http://ml-agent.railway.internal:8000"
 
 async def get_ml_prediction(features: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """

@@ -347,6 +347,13 @@ def find_sr_proper(candles: list, current_price: float) -> tuple:
 # ============================================================
 
 def detect_candle(candles: list):
+    """
+    Анализ свечей с акцентом на тени/фитили.
+    Возвращает (pattern_name, score) где score:
+      > 0 = бычий сигнал
+      < 0 = медвежий сигнал
+      = 0 = нейтральный
+    """
     if len(candles) < 3:
         return "none", 0.0
 
@@ -359,30 +366,123 @@ def detect_candle(candles: list):
         return "none", 0.0
 
     body_pct = body / rng
-    if body_pct < 0.1:
-        return "doji", 0.0
-
     lower_shadow = min(o, cl) - l
     upper_shadow = h - max(o, cl)
-
-    if lower_shadow > body * 2 and upper_shadow < body * 0.5 and cl > o:
-        return "hammer", 0.8
-    if upper_shadow > body * 2 and lower_shadow < body * 0.5 and cl < o:
-        return "shooting_star", -0.8
+    lower_shadow_pct = lower_shadow / rng
+    upper_shadow_pct = upper_shadow / rng
 
     prev = candles[-2]
     po, pc = float(prev["open"]), float(prev["close"])
 
+    # === ДОЖИ ===
+    if body_pct < 0.1:
+        return "doji", 0.0
+
+    # === ПАТТЕРНЫ С ТЕНЯМИ (приоритет) ===
+
+    # Rejection высокий (длинная верхняя тень > 60% свечи, тело < 30%) → SELL
+    if upper_shadow_pct >= 0.6 and body_pct <= 0.3:
+        score = -0.85 - (upper_shadow_pct - 0.6) * 0.5  # сильнее если тень длиннее
+        return "rejection_high", max(-1.0, score)
+
+    # Rejection низкий (длинная нижняя тень > 60% свечи, тело < 30%) → BUY
+    if lower_shadow_pct >= 0.6 and body_pct <= 0.3:
+        score = 0.85 + (lower_shadow_pct - 0.6) * 0.5
+        return "rejection_low", min(1.0, score)
+
+    # Hammer классический (нижняя тень > 2× тело, верхняя < 0.3× тело) → BUY
+    if body > 0 and lower_shadow > body * 2 and upper_shadow < body * 0.3:
+        strength = min(1.0, lower_shadow / body / 3)
+        return "hammer", 0.75 + strength * 0.2
+
+    # Shooting star (верхняя тень > 2× тело, нижняя < 0.3× тело) → SELL
+    if body > 0 and upper_shadow > body * 2 and lower_shadow < body * 0.3:
+        strength = min(1.0, upper_shadow / body / 3)
+        return "shooting_star", -(0.75 + strength * 0.2)
+
+    # Inverted hammer (верхняя тень > 1.5× тело, бычья свеча) → BUY (слабее)
+    if body > 0 and upper_shadow > body * 1.5 and cl > o and lower_shadow < body * 0.5:
+        return "inverted_hammer", 0.45
+
+    # Hanging man (нижняя тень > 1.5× тело, медвежья свеча) → SELL (слабее)
+    if body > 0 and lower_shadow > body * 1.5 and cl < o and upper_shadow < body * 0.5:
+        return "hanging_man", -0.45
+
+    # === ЭНГЕЛЬФИНГ ===
     if cl < o and pc > po and o > pc and cl < po:
         return "bearish_engulfing", -0.9
     if cl > o and pc < po and o < pc and cl > po:
         return "bullish_engulfing", 0.9
+
+    # === МАРУБОЗУ ===
+    if cl > o and body_pct > 0.85 and upper_shadow_pct < 0.05 and lower_shadow_pct < 0.05:
+        return "bullish_marubozu", 0.6
+    if cl < o and body_pct > 0.85 and upper_shadow_pct < 0.05 and lower_shadow_pct < 0.05:
+        return "bearish_marubozu", -0.6
+
+    # Обычные большие свечи
     if cl > o and body_pct > 0.6:
-        return "bullish_marubozu", 0.5
+        return "bullish_marubozu", 0.4
     if cl < o and body_pct > 0.6:
-        return "bearish_marubozu", -0.5
+        return "bearish_marubozu", -0.4
 
     return "none", 0.0
+
+
+def detect_fvg(candles: list, current_price: float) -> dict:
+    """
+    Fair Value Gap (FVG) — зоны дисбаланса цены.
+    Bullish FVG: low[i] > high[i-2] → зона поддержки
+    Bearish FVG: high[i] < low[i-2] → зона сопротивления
+    """
+    result = {"bullish_fvg": None, "bearish_fvg": None, "in_fvg": None}
+
+    if len(candles) < 3:
+        return result
+
+    # Ищем FVG в последних 20 свечах
+    for i in range(2, min(20, len(candles))):
+        c0 = candles[-(i+1)]  # старая свеча
+        c2 = candles[-(i-1)]  # новая свеча
+
+        high0 = float(c0["high"])
+        low0 = float(c0["low"])
+        high2 = float(c2["high"])
+        low2 = float(c2["low"])
+
+        # Bullish FVG: gap вверх
+        if low2 > high0:
+            gap_size = (low2 - high0) / current_price * 100
+            if gap_size >= 0.1:  # минимум 0.1%
+                fvg_mid = (low2 + high0) / 2
+                result["bullish_fvg"] = {
+                    "top": low2,
+                    "bottom": high0,
+                    "mid": fvg_mid,
+                    "size_pct": round(gap_size, 3),
+                    "dist_pct": round(abs(current_price - fvg_mid) / current_price * 100, 3)
+                }
+                if high0 <= current_price <= low2:
+                    result["in_fvg"] = "bullish"
+                break
+
+        # Bearish FVG: gap вниз
+        if high2 < low0:
+            gap_size = (low0 - high2) / current_price * 100
+            if gap_size >= 0.1:
+                fvg_mid = (low0 + high2) / 2
+                result["bearish_fvg"] = {
+                    "top": low0,
+                    "bottom": high2,
+                    "mid": fvg_mid,
+                    "size_pct": round(gap_size, 3),
+                    "dist_pct": round(abs(current_price - fvg_mid) / current_price * 100, 3)
+                }
+                if high2 <= current_price <= low0:
+                    result["in_fvg"] = "bearish"
+                break
+
+    return result
 
 
 # ============================================================

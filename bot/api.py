@@ -225,3 +225,69 @@ async def get_market_context():
     from market_context import get_context
     ctx = get_context()
     return ctx if ctx else {"error": "Context not yet available"}
+
+
+@app.get("/api/candles")
+async def get_candles(symbol: str = "BTC", interval: str = "60", limit: int = 200):
+    """Свечи для графика — проксируем из Bybit."""
+    import aiohttp
+    from config import bybit_symbol
+    try:
+        bs = bybit_symbol(symbol)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://api.bybit.com/v5/market/kline",
+                params={"category": "linear", "symbol": bs, "interval": interval, "limit": limit},
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                data = await resp.json()
+                if data.get("retCode") != 0:
+                    return []
+                candles = [
+                    {
+                        "time": int(r[0]) // 1000,
+                        "open": float(r[1]),
+                        "high": float(r[2]),
+                        "low": float(r[3]),
+                        "close": float(r[4]),
+                        "volume": float(r[5]),
+                    }
+                    for r in reversed(data["result"]["list"])
+                ]
+                return candles
+    except Exception as e:
+        return []
+
+
+@app.get("/api/signals")
+async def get_signals():
+    """Монеты с активными SR сигналами прямо сейчас."""
+    rows = await db.fetch("""
+        SELECT DISTINCT ON (symbol)
+            symbol, sr_signal, sr_strength,
+            ROUND(distance_to_support_pct::numeric, 2) as dist_sup,
+            ROUND(distance_to_resistance_pct::numeric, 2) as dist_res,
+            candlestick_pattern,
+            ROUND(rsi_14::numeric, 1) as rsi,
+            market_mode,
+            ROUND(r_1h::numeric, 3) as r_1h,
+            volume_bucket
+        FROM crypto_features_hourly
+        WHERE ts > now() - interval '10 minutes'
+        AND sr_signal != 'neutral'
+        ORDER BY symbol, ts DESC
+    """)
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/market_context")
+async def get_market_context():
+    """Текущий контекст рынка."""
+    row = await db.fetchrow("""
+        SELECT features_snapshot FROM crypto_market_global WHERE id='latest'
+    """)
+    if row and row["features_snapshot"]:
+        import json
+        ctx = json.loads(row["features_snapshot"]) if isinstance(row["features_snapshot"], str) else row["features_snapshot"]
+        return ctx
+    return {}

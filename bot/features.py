@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from config import bybit_symbol, FEATURE_INTERVAL
 import db
 from market_context import get_context
+from candle_analysis import detect_fvg, detect_order_blocks, detect_market_structure, score_candle_for_direction
 
 logger = logging.getLogger("features")
 BYBIT_BASE = "https://api.bybit.com"
@@ -568,6 +569,11 @@ async def build_features(session, symbol: str):
 
     candle_pattern, candle_score = detect_candle(klines) if klines else ("none", 0.0)
 
+    # Расширенный свечной анализ
+    fvg_data = detect_fvg(klines, current) if klines else {}
+    ob_data = detect_order_blocks(klines, current) if klines else {}
+    ms_data = detect_market_structure(klines, current) if klines else {}
+
     # S/R анализ через текущий sr_engine
     if klines and len(klines) >= 20:
         try:
@@ -684,6 +690,19 @@ async def build_features(session, symbol: str):
         "reversal_score": reversal_score,
         "distance_to_support_pct": dist_to_support_pct,
         "distance_to_resistance_pct": dist_to_resistance_pct,
+
+        # Свечной анализ
+        "in_bullish_fvg": fvg_data.get("in_bullish_fvg", False),
+        "in_bearish_fvg": fvg_data.get("in_bearish_fvg", False),
+        "nearest_fvg": fvg_data.get("nearest_fvg"),
+        "nearest_fvg_dist_pct": fvg_data.get("nearest_fvg_dist_pct"),
+        "in_bullish_ob": ob_data.get("in_bullish_ob", False),
+        "in_bearish_ob": ob_data.get("in_bearish_ob", False),
+        "ms_structure": ms_data.get("structure", "ranging"),
+        "ms_bos_bullish": ms_data.get("bos_bullish", False),
+        "ms_bos_bearish": ms_data.get("bos_bearish", False),
+        "ms_choch_bullish": ms_data.get("choch_bullish", False),
+        "ms_choch_bearish": ms_data.get("choch_bearish", False),
     }
 
 

@@ -196,6 +196,28 @@ def _score_market_mode(market_mode: str, is_long: bool) -> int:
 
 
 
+def _score_candle_confirmation(candle_pattern: str, candle_score: float, sr_signal: str, is_long: bool) -> int:
+    """Упрощённая оценка — используем candle_score_long/short из features."""
+    if not candle_pattern or candle_pattern == "none":
+        return 0
+    if is_long:
+        if candle_pattern in ("rejection_low", "hammer", "inverted_hammer"):
+            return 100 if sr_signal == "bounce_support" else 60
+        elif candle_pattern in ("bullish_engulfing", "bullish_marubozu"):
+            return 50
+        elif candle_pattern in ("rejection_high", "shooting_star", "bearish_engulfing"):
+            return -50
+    else:
+        if candle_pattern in ("rejection_high", "shooting_star", "hanging_man"):
+            return 100 if sr_signal == "bounce_resistance" else 60
+        elif candle_pattern in ("bearish_engulfing", "bearish_marubozu"):
+            return 50
+        elif candle_pattern in ("rejection_low", "hammer", "bullish_engulfing"):
+            return -50
+    return 0
+
+
+
 async def calculate_score(features: dict, direction: str, market_mode: str, ml_forecast: dict = None) -> int:
     is_long = direction == "long"
     weights_data = await get_weights()
@@ -213,14 +235,25 @@ async def calculate_score(features: dict, direction: str, market_mode: str, ml_f
     sr_signal = features.get("sr_signal") or "neutral"
     rs = _f(features.get("relative_strength"))
 
+    candle_pattern = str(features.get("candlestick_pattern") or "none")
+    candle_score_val = float(features.get("candlestick_score") or 0)
+
+    # Получаем готовый свечной скор из features (включает FVG + OB + MS)
+    if is_long:
+        candle_composite = int(features.get("candle_score_long") or
+            _score_candle_confirmation(candle_pattern, candle_score_val, sr_signal, is_long))
+    else:
+        candle_composite = int(features.get("candle_score_short") or
+            _score_candle_confirmation(candle_pattern, candle_score_val, sr_signal, is_long))
+
     scores = {
-        "distance":          _score_distance(dist, is_long),
-        "rsi":               _score_rsi(rsi, is_long),
-        "momentum_1h":       _score_momentum_1h(r_1h, is_long),
-        "momentum_24h":      _score_momentum_24h(r_24h, is_long),
-        "volume":            _score_volume(volume_bucket),
-        "sr_signal":         _score_sr_signal(sr_signal, is_long),
-        "relative_strength": _score_relative_strength(rs, is_long),
+        "sr_signal":            _score_sr_signal(sr_signal, is_long),
+        "candle_confirmation":  candle_composite,
+        "momentum_1h":          _score_momentum_1h(r_1h, is_long),
+        "rsi":                  _score_rsi(rsi, is_long),
+        "relative_strength":    _score_relative_strength(rs, is_long),
+        "volume":               _score_volume(volume_bucket),
+        "momentum_24h":         _score_momentum_24h(r_24h, is_long),
     }
 
     # ML фактор

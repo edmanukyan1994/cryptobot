@@ -733,7 +733,11 @@ async def run_features_builder():
                                     relative_strength, volume_bucket, volatility_bucket,
                                     impulse_score, reversal_score,
                                     distance_to_support_pct, distance_to_resistance_pct,
-                                    is_aggressive_bear, is_aggressive_bull, no_long_zone, no_short_zone, btc_move_strength
+                                    is_aggressive_bear, is_aggressive_bull, no_long_zone, no_short_zone, btc_move_strength,
+                                    candle_score_long, candle_score_short,
+                                    in_bullish_fvg, in_bearish_fvg, nearest_fvg, nearest_fvg_dist_pct,
+                                    in_bullish_ob, in_bearish_ob,
+                                    ms_structure, ms_bos_bullish, ms_bos_bearish, ms_choch_bullish, ms_choch_bearish
                                 )
                                 VALUES
                                 (
@@ -746,7 +750,11 @@ async def run_features_builder():
                                     $26,$27,$28,$29,
                                     $30,$31,$32,
                                     $33,$34,
-                                    $35,$36,$37,$38,$39,$40,$41
+                                    $35,$36,$37,$38,$39,$40,$41,
+                                    $42,$43,
+                                    $44,$45,$46,$47,
+                                    $48,$49,
+                                    $50,$51,$52,$53,$54
                                 )
                                 """,
                                 f["symbol"], f["ts"], f["price"], f["volume_24h"], f["r_1h"], f["r_24h"], f["rsi_14"],
@@ -761,7 +769,14 @@ async def run_features_builder():
                                 f["distance_to_support_pct"], f["distance_to_resistance_pct"],
                                 f["is_aggressive_bear"], f["is_aggressive_bull"],
                                 f["no_long_zone"], f["no_short_zone"],
-                                 f["btc_move_strength"],
+                                f["btc_move_strength"],
+                                f.get("candle_score_long", 0), f.get("candle_score_short", 0),
+                                f.get("in_bullish_fvg", False), f.get("in_bearish_fvg", False),
+                                f.get("nearest_fvg"), f.get("nearest_fvg_dist_pct"),
+                                f.get("in_bullish_ob", False), f.get("in_bearish_ob", False),
+                                f.get("ms_structure", "ranging"),
+                                f.get("ms_bos_bullish", False), f.get("ms_bos_bearish", False),
+                                f.get("ms_choch_bullish", False), f.get("ms_choch_bearish", False),
                             )
                             built += 1
                     except Exception as e:

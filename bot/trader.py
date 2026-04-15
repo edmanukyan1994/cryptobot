@@ -326,9 +326,17 @@ async def check_entry(
     except Exception:
         prob = 0.0
 
-    direction = normalize_direction(forecast.get("direction"))
-    if not direction:
-        return False, "", "neutral_forecast"
+    # Направление определяем из SR сигнала (надёжнее forecaster)
+    sr_signal_raw = str(features.get("sr_signal") or "neutral")
+    if sr_signal_raw in ("bounce_resistance", "breakout_down", "retest_broken_support_short"):
+        direction = "short"
+    elif sr_signal_raw in ("bounce_support", "breakout_up", "retest_broken_resistance_long"):
+        direction = "long"
+    else:
+        # Fallback на forecaster если нет SR сигнала
+        direction = normalize_direction(forecast.get("direction"))
+        if not direction:
+            return False, "", "neutral_forecast_no_sr"
 
     volume = float(features.get("volume_24h") or 0)
     volume_bucket = str(features.get("volume_bucket") or volume_to_bucket(volume))

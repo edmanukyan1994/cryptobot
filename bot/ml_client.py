@@ -30,5 +30,5 @@ async def get_ml_prediction(features: Dict[str, Any]) -> Optional[Dict[str, Any]
                     logger.warning(f"ML agent returned {resp.status}")
                     return None
     except Exception as e:
-        logger.debug(f"ML agent error: {e}")
+        logger.warning(f"ML agent error (url={ML_AGENT_URL}): {e}")
         return None

@@ -309,15 +309,10 @@ async def should_enter_long(features: dict, forecast: dict, market_mode: str) ->
     ml_prob = float((ml_prediction or {}).get("direction_probability") or 0)
 
     if ml_dir in ("up", "neutral", None):
-        if ml_dir is None:
-            # ML не ответил — решаем только по скору
-            if score >= threshold:
-                return True, score, f"score={score}_no_ml"
-        else:
-            if ml_prob >= 55 and score >= threshold:
-                return True, score, f"score={score}_prob={ml_prob:.0f}"
-        if score >= threshold + 15:
-            return True, score, f"high_score_only={score}"
+        if score >= threshold:
+            return True, score, f"score={score}_ml={ml_dir}({ml_prob:.0f})"
+        elif score >= threshold - 10 and ml_prob >= 60:
+            return True, score, f"score={score}_ml_boost"
 
     return False, score, f"score={score}<{threshold}_or_dir={ml_dir}"
 
@@ -340,15 +335,10 @@ async def should_enter_short(features: dict, forecast: dict, market_mode: str) -
     ml_prob = float((ml_prediction or {}).get("direction_probability") or 0)
 
     if ml_dir in ("down", "neutral", None):
-        if ml_dir is None:
-            # ML не ответил — решаем только по скору
-            if score >= threshold:
-                return True, score, f"score={score}_no_ml"
-        else:
-            if ml_prob >= 55 and score >= threshold:
-                return True, score, f"score={score}_prob={ml_prob:.0f}"
-        if score >= threshold + 15:
-            return True, score, f"high_score_only={score}"
+        if score >= threshold:
+            return True, score, f"score={score}_ml={ml_dir}({ml_prob:.0f})"
+        elif score >= threshold - 10 and ml_prob >= 60:
+            return True, score, f"score={score}_ml_boost"
 
     return False, score, f"score={score}<{threshold}_or_dir={ml_dir}"
 

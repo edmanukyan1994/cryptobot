@@ -341,6 +341,7 @@ async def should_enter_short(features: dict, forecast: dict, market_mode: str) -
     ml_dir = (ml_prediction or {}).get("direction")
     ml_prob = float((ml_prediction or {}).get("direction_probability") or 0)
 
+    logger.info(f"should_enter_short: score={score} threshold={threshold} ml_dir={ml_dir} ml_prob={ml_prob:.0f}")
     if ml_dir in ("down", "neutral", None):
         if score >= threshold:
             return True, score, f"score={score}_ml={ml_dir}({ml_prob:.0f})"

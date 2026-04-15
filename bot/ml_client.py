@@ -16,16 +16,20 @@ async def get_ml_prediction(features: Dict[str, Any]) -> Optional[Dict[str, Any]
     Возвращает: {"direction": "up/down/neutral", "direction_probability": float, "confidence": float}
     """
     try:
-        # Конвертируем все значения в JSON-совместимые типы
+        # ML агент ожидает только числовые признаки из FEATURE_NAMES
+        FEATURE_NAMES = [
+            'rsi_14', 'macd', 'macd_signal', 'macd_histogram',
+            'bollinger_width', 'atr', 'volume_24h', 'r_1h', 'r_24h',
+            'impulse_score', 'reversal_score', 'relative_strength',
+            'distance_to_support_pct', 'distance_to_resistance_pct'
+        ]
         clean = {}
-        for k, v in features.items():
-            if isinstance(v, (int, float, str, bool)) or v is None:
-                clean[k] = v
-            else:
-                try:
-                    clean[k] = float(v)
-                except (TypeError, ValueError):
-                    clean[k] = str(v)
+        for k in FEATURE_NAMES:
+            v = features.get(k)
+            try:
+                clean[k] = float(v) if v is not None else 0.0
+            except (TypeError, ValueError):
+                clean[k] = 0.0
 
         async with aiohttp.ClientSession() as session:
             async with session.post(

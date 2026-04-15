@@ -343,9 +343,13 @@ async def check_entry(
     volatility_bucket = str(features.get("volatility_bucket") or "unknown")
 
     # Минимальные фильтры (безопасность)
-    min_prob_floor = float(params.get("min_prob_floor") or 55.0)
-    if prob < min_prob_floor:
-        return False, "", f"weak_prob_floor({prob:.1f}<{min_prob_floor:.1f})"
+    # prob_floor только если direction из forecaster (не из SR сигнала)
+    sr_sig_check = str(features.get("sr_signal") or "neutral")
+    sr_driven = sr_sig_check not in ("neutral",)
+    if not sr_driven:
+        min_prob_floor = float(params.get("min_prob_floor") or 55.0)
+        if prob < min_prob_floor:
+            return False, "", f"weak_prob_floor({prob:.1f}<{min_prob_floor:.1f})"
 
     if volume < 500_000:
         return False, "", f"low_volume({volume:.0f})"

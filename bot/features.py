@@ -710,6 +710,8 @@ async def build_features(session, symbol: str):
         "distance_to_resistance_pct": dist_to_resistance_pct,
 
         # Свечной анализ
+        "candle_score_long": candle_score_long,
+        "candle_score_short": candle_score_short,
         "in_bullish_fvg": fvg_data.get("in_bullish_fvg", False),
         "in_bearish_fvg": fvg_data.get("in_bearish_fvg", False),
         "nearest_fvg": fvg_data.get("nearest_fvg"),

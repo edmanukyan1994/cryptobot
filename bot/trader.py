@@ -954,6 +954,10 @@ async def trading_cycle():
                 continue
 
             features = dict(f_row)
+            # Убедимся что все значения простые типы (не Decimal/UUID)
+            features = {k: (float(v) if hasattr(v, '__float__') and not isinstance(v, bool) and not isinstance(v, str) else v) 
+                       for k, v in features.items() 
+                       if not callable(v)}
 
             age = (datetime.now(timezone.utc) - features["ts"].replace(tzinfo=timezone.utc)).total_seconds() / 60
             if age > 30:

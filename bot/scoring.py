@@ -223,6 +223,13 @@ async def calculate_score(features: dict, direction: str, market_mode: str, ml_f
     weights_data = await get_weights()
     weights = weights_data["weights"]
 
+    # Конвертируем asyncpg Record в dict если нужно
+    if not isinstance(features, dict):
+        try:
+            features = dict(features)
+        except Exception:
+            pass
+
     def _f(v):
         try: return float(v) if v is not None else None
         except: return None

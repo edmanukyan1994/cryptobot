@@ -187,9 +187,17 @@ def score_candle_for_direction(
     # 1. Свечной паттерн
     if is_long:
         if candle_pattern in ("rejection_low", "hammer", "inverted_hammer"):
-            score += 60 if sr_signal == "bounce_support" else 35
+            if sr_signal == "bounce_support":
+                score += 60  # идеальное совпадение
+            elif sr_signal == "bounce_resistance":
+                score -= 30  # противоречие — свеча бычья но SR медвежий
+            else:
+                score += 35
         elif candle_pattern in ("bullish_engulfing", "bullish_marubozu"):
-            score += 30
+            if sr_signal == "bounce_resistance":
+                score -= 20  # слабое противоречие
+            else:
+                score += 30
         elif candle_pattern == "doji":
             score += 5
         elif candle_pattern in ("rejection_high", "shooting_star", "hanging_man"):
@@ -198,9 +206,17 @@ def score_candle_for_direction(
             score -= 40
     else:
         if candle_pattern in ("rejection_high", "shooting_star", "hanging_man"):
-            score += 60 if sr_signal == "bounce_resistance" else 35
+            if sr_signal == "bounce_resistance":
+                score += 60  # идеальное совпадение
+            elif sr_signal == "bounce_support":
+                score -= 30  # противоречие — свеча медвежья но SR бычий
+            else:
+                score += 35  # нет SR, но свеча медвежья
         elif candle_pattern in ("bearish_engulfing", "bearish_marubozu"):
-            score += 30
+            if sr_signal == "bounce_support":
+                score -= 20  # слабое противоречие
+            else:
+                score += 30
         elif candle_pattern == "doji":
             score += 5
         elif candle_pattern in ("rejection_low", "hammer", "inverted_hammer"):

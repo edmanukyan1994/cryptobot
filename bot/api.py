@@ -291,3 +291,18 @@ async def get_market_context():
         ctx = json.loads(row["features_snapshot"]) if isinstance(row["features_snapshot"], str) else row["features_snapshot"]
         return ctx
     return {}
+
+
+@app.get("/api/debug_features")
+async def debug_features(symbol: str = "BTC"):
+    """Debug endpoint — проверяем candle scores."""
+    row = await db.fetchrow("""
+        SELECT candlestick_pattern, candle_score_long, candle_score_short,
+               sr_signal, ms_structure, in_bullish_fvg, in_bearish_fvg
+        FROM crypto_features_hourly
+        WHERE symbol=$1
+        ORDER BY ts DESC LIMIT 1
+    """, symbol)
+    if not row:
+        return {"error": "no data"}
+    return dict(row)

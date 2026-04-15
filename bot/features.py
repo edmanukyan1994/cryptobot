@@ -615,14 +615,21 @@ async def build_features(session, symbol: str):
     dist_to_resistance_pct = calc_distance_pct(current, res)
 
     # Свечной скор вычисляем ЗДЕСЬ — после того как sr_sig уже известен
-    candle_score_long = score_candle_for_direction(
-        candle_pattern, float(candle_score or 0),
-        sr_sig, fvg_data, ob_data, ms_data, is_long=True
-    )
-    candle_score_short = score_candle_for_direction(
-        candle_pattern, float(candle_score or 0),
-        sr_sig, fvg_data, ob_data, ms_data, is_long=False
-    )
+    try:
+        candle_score_long = score_candle_for_direction(
+            candle_pattern, float(candle_score or 0),
+            sr_sig, fvg_data, ob_data, ms_data, is_long=True
+        )
+        candle_score_short = score_candle_for_direction(
+            candle_pattern, float(candle_score or 0),
+            sr_sig, fvg_data, ob_data, ms_data, is_long=False
+        )
+        if candle_score_long != 0 or candle_score_short != 0:
+            logger.info(f"Candle score {symbol}: {candle_pattern}+{sr_sig} → long={candle_score_long} short={candle_score_short}")
+    except Exception as e:
+        logger.warning(f"Candle score error {symbol}: {e}")
+        candle_score_long = 0
+        candle_score_short = 0
 
     volume_24h = float(latest["volume_24h"] or 0)
     volume_bucket = classify_volume_bucket(volume_24h)

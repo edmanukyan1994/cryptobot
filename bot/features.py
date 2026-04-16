@@ -810,3 +810,34 @@ async def run_features_builder():
                 logger.error(f"Features builder error: {e}")
 
             await asyncio.sleep(FEATURE_INTERVAL)
+
+
+async def update_targets():
+    """Обновляет target_4h для записей старше 4 часов на основе реальной цены"""
+    try:
+        updated = await db.execute("""
+            UPDATE crypto_features_hourly f
+            SET target_4h = subq.new_target
+            FROM (
+                SELECT
+                    f.id,
+                    CASE
+                        WHEN (p_future.price - f.price) / f.price > 0.005 THEN 1
+                        WHEN (p_future.price - f.price) / f.price < -0.005 THEN 0
+                        ELSE NULL
+                    END as new_target
+                FROM crypto_features_hourly f
+                JOIN LATERAL (
+                    SELECT price FROM crypto_prices_bybit
+                    WHERE symbol = f.symbol
+                    AND ts BETWEEN f.ts + interval '3h 50m' AND f.ts + interval '4h 10m'
+                    ORDER BY ts ASC LIMIT 1
+                ) p_future ON true
+                WHERE f.ts < now() - interval '4 hours'
+                AND f.target_4h IS NULL
+            ) subq
+            WHERE f.id = subq.id
+        """)
+        logger.info(f"Targets updated: {updated}")
+    except Exception as e:
+        logger.warning(f"Target update error: {e}")

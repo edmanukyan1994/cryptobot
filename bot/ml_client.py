@@ -16,12 +16,16 @@ async def get_ml_prediction(features: Dict[str, Any]) -> Optional[Dict[str, Any]
     Возвращает: {"direction": "up/down/neutral", "direction_probability": float, "confidence": float}
     """
     try:
-        # ML агент ожидает только числовые признаки из FEATURE_NAMES
+        # Все признаки включая новые (candle, FVG, OB, MS)
         FEATURE_NAMES = [
             'rsi_14', 'macd', 'macd_signal', 'macd_histogram',
-            'bollinger_width', 'atr', 'volume_24h', 'r_1h', 'r_24h',
-            'impulse_score', 'reversal_score', 'relative_strength',
-            'distance_to_support_pct', 'distance_to_resistance_pct'
+            'bollinger_width', 'atr', 'r_1h', 'r_24h',
+            'volume_24h', 'impulse_score', 'reversal_score',
+            'relative_strength',
+            'distance_to_support_pct', 'distance_to_resistance_pct',
+            'candle_score_long', 'candle_score_short',
+            'in_bullish_fvg', 'in_bearish_fvg',
+            'in_bullish_ob', 'in_bearish_ob',
         ]
         clean = {}
         for k in FEATURE_NAMES:

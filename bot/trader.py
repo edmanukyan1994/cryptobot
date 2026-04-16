@@ -371,11 +371,18 @@ async def check_entry(
     r_1h = float(features.get("r_1h") or 0)
 
     # В боковике — только от S/R уровней
-    if market_mode in ("bear_sideways", "bull_sideways"):
+    if market_mode == "bear_sideways":
         if direction == "short" and sr_signal != "bounce_resistance":
             return False, "", f"sideways_needs_resistance(sr={sr_signal})"
         if direction == "long" and sr_signal not in ("bounce_support", "breakout_up"):
             return False, "", f"sideways_needs_support(sr={sr_signal})"
+
+    # В bull_sideways — только лонги от поддержки, шорты запрещены
+    if market_mode == "bull_sideways":
+        if direction == "short":
+            return False, "", f"no_shorts_in_bull_sideways"
+        if direction == "long" and sr_signal not in ("bounce_support", "breakout_up"):
+            return False, "", f"bull_sideways_needs_support(sr={sr_signal})"
 
     # В сильном тренде — только импульсный вход
     if market_mode == "bear" and direction == "short" and r_1h > -0.3:

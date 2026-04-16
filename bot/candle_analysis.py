@@ -24,7 +24,7 @@ def detect_fvg(candles: list, current_price: float) -> dict:
 
         if low2 > high0:
             gap = (low2 - high0) / current_price * 100
-            if gap >= 0.1:
+            if gap >= 0.05:
                 mid = (low2 + high0) / 2
                 dist = abs(current_price - mid) / current_price * 100
                 in_fvg = high0 <= current_price <= low2
@@ -34,7 +34,7 @@ def detect_fvg(candles: list, current_price: float) -> dict:
 
         if high2 < low0:
             gap = (low0 - high2) / current_price * 100
-            if gap >= 0.1:
+            if gap >= 0.05:
                 mid = (low0 + high2) / 2
                 dist = abs(current_price - mid) / current_price * 100
                 in_fvg = high2 <= current_price <= low0

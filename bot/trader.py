@@ -286,8 +286,8 @@ def btc_move_allows_entry(
             return False, "btc_weak_down_filter"
         return True, "ok"
 
-    if st == "long_trend":
-        if btc_mom in ("strong_down", "weak_down"):
+    if st in ("long_trend", "long_support"):
+        if btc_mom == "strong_down":
             return False, "btc_down_block_trend"
         return True, "ok"
 

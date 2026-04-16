@@ -809,6 +809,9 @@ async def run_features_builder():
             except Exception as e:
                 logger.error(f"Features builder error: {e}")
 
+            # Обновляем target_4h для старых записей (для ML обучения)
+            await update_targets()
+
             await asyncio.sleep(FEATURE_INTERVAL)
 
 

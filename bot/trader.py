@@ -378,9 +378,12 @@ async def check_entry(
             return False, "", f"sideways_needs_support(sr={sr_signal})"
 
     # В bull — только лонги, шорты запрещены
+    # Лонги только при r_1h <= 0.05% (не входим на разогнанных монетах)
     if market_mode == "bull":
         if direction == "short":
             return False, "", f"no_shorts_in_bull"
+        if direction == "long" and r_1h > 0.05:
+            return False, "", f"bull_long_needs_flat_r1h({r_1h:.3f}>0.05)"
 
     # В bull_sideways — только лонги от поддержки, шорты запрещены
     if market_mode == "bull_sideways":

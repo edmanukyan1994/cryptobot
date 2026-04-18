@@ -391,6 +391,10 @@ async def check_entry(
             return False, "", f"no_shorts_in_bull_sideways"
         if direction == "long" and sr_signal not in ("bounce_support", "breakout_up"):
             return False, "", f"bull_sideways_needs_support(sr={sr_signal})"
+        # Не входим в лонг при медвежьей свече без теней — прямое противоречие
+        candle = str(features.get("candlestick_pattern") or "none")
+        if direction == "long" and candle in ("bearish_marubozu",):
+            return False, "", f"bull_sideways_bearish_candle({candle})"
 
     # В сильном тренде — только импульсный вход
     if market_mode == "bear" and direction == "short" and r_1h > -0.3:

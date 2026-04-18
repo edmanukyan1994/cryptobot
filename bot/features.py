@@ -567,12 +567,14 @@ async def build_features(session, symbol: str):
     r_24h = float(latest["price_change_24h"] or 0)
     r_1h = round((prices[-1] - prices[-2]) / prices[-2] * 100, 4) if len(prices) >= 2 and prices[-2] > 0 else 0
 
-    candle_pattern, candle_score = detect_candle(klines) if klines else ("none", 0.0)
+    # Используем закрытые свечи (исключаем последнюю незакрытую)
+    closed_klines = klines[:-1] if klines and len(klines) > 1 else klines
+    candle_pattern, candle_score = detect_candle(closed_klines) if closed_klines else ("none", 0.0)
 
-    # Расширенный свечной анализ
-    fvg_data = detect_fvg(klines, current) if klines else {}
-    ob_data = detect_order_blocks(klines, current) if klines else {}
-    ms_data = detect_market_structure(klines, current) if klines else {}
+    # Расширенный свечной анализ (на закрытых свечах)
+    fvg_data = detect_fvg(closed_klines, current) if closed_klines else {}
+    ob_data = detect_order_blocks(closed_klines, current) if closed_klines else {}
+    ms_data = detect_market_structure(closed_klines, current) if closed_klines else {}
     # Примечание: score_candle вызывается ПОСЛЕ вычисления sr_sig ниже
 
     # S/R анализ через текущий sr_engine

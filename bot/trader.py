@@ -471,9 +471,12 @@ async def get_price(symbol: str) -> float | None:
     return price
 
 
-async def get_sl_price(symbol: str, price: float, direction: str) -> tuple[float, float]:
+async def get_sl_price(symbol: str, price: float, direction: str, market_mode: str = "") -> tuple[float, float]:
     MAX_SL_PCT = 15.0
     SR_BUFFER = 0.005
+
+    # Минимальный стоп для bull_sideways — 3% чтобы пережить шум
+    MIN_SL_PCT = 3.0 if market_mode == "bull_sideways" else 0.5
 
     try:
         f_row = await db.fetchrow(
@@ -486,17 +489,25 @@ async def get_sl_price(symbol: str, price: float, direction: str) -> tuple[float
                 sl_price = res * (1 + SR_BUFFER)
                 sl_pct = (sl_price - price) / price * 100
                 if 0.5 <= sl_pct <= MAX_SL_PCT:
+                    # Если стоп от SR меньше минимума — расширяем
+                    if sl_pct < MIN_SL_PCT:
+                        sl_pct = MIN_SL_PCT
+                        sl_price = price * (1 + sl_pct / 100)
                     return sl_price, round(sl_pct, 2)
             elif direction == "long" and f_row["support_1"]:
                 sup = float(f_row["support_1"])
                 sl_price = sup * (1 - SR_BUFFER)
                 sl_pct = (price - sl_price) / price * 100
                 if 0.5 <= sl_pct <= MAX_SL_PCT:
+                    # Если стоп от SR меньше минимума — расширяем
+                    if sl_pct < MIN_SL_PCT:
+                        sl_pct = MIN_SL_PCT
+                        sl_price = price * (1 - sl_pct / 100)
                     return sl_price, round(sl_pct, 2)
     except Exception:
         pass
 
-    sl_pct = MAX_SL_PCT
+    sl_pct = max(MIN_SL_PCT, MAX_SL_PCT) if market_mode == "bull_sideways" else MAX_SL_PCT
     if direction == "short":
         return price * (1 + sl_pct / 100), sl_pct
     return price * (1 - sl_pct / 100), sl_pct
@@ -536,7 +547,7 @@ async def open_trade(
         return None
 
     crypto = size / price
-    default_sl_price, _ = await get_sl_price(symbol, price, direction)
+    default_sl_price, _ = await get_sl_price(symbol, price, direction, market_mode=market_mode)
     sl_price = float(sl_price_override) if sl_price_override and sl_price_override > 0 else default_sl_price
 
     if direction == "short":

@@ -544,34 +544,48 @@ async def open_trade(
     sl_pct = round(sl_pct, 2)
     tp1 = float(params.get("tp1_percent") or 2.0)
 
-    entry_features = forecast.get("features_snapshot") or {}
-    if isinstance(entry_features, str):
-        try:
-            entry_features = json.loads(entry_features)
-        except Exception:
-            entry_features = {}
-
-    if not entry_features:
-        entry_features = {
-            "regime": features.get("regime"),
-            "rsi_14": features.get("rsi_14"),
-            "r_1h": features.get("r_1h"),
-            "r_24h": features.get("r_24h"),
-            "volume_24h": features.get("volume_24h"),
-            "sr_signal": features.get("sr_signal"),
-            "btc_regime": features.get("btc_regime"),
-            "btc_structure_4h": features.get("btc_structure_4h"),
-            "market_mode": features.get("market_mode"),
-            "relative_strength": features.get("relative_strength"),
-            "volume_bucket": features.get("volume_bucket"),
-            "volatility_bucket": features.get("volatility_bucket"),
-            "impulse_score": features.get("impulse_score"),
-            "reversal_score": features.get("reversal_score"),
-            "btc_context": {
-                "global_regime": features.get("btc_regime"),
-                "price_structure_4h": features.get("btc_structure_4h"),
-            },
-        }
+    # Всегда используем актуальные features (содержат candle_score, FVG, MS и т.д.)
+    entry_features = {
+        "regime": features.get("regime"),
+        "rsi_14": features.get("rsi_14"),
+        "r_1h": features.get("r_1h"),
+        "r_24h": features.get("r_24h"),
+        "volume_24h": features.get("volume_24h"),
+        "sr_signal": features.get("sr_signal"),
+        "sr_strength": features.get("sr_strength"),
+        "btc_regime": features.get("btc_regime"),
+        "btc_structure_4h": features.get("btc_structure_4h"),
+        "market_mode": features.get("market_mode"),
+        "btc_momentum": features.get("btc_momentum"),
+        "relative_strength": features.get("relative_strength"),
+        "volume_bucket": features.get("volume_bucket"),
+        "volatility_bucket": features.get("volatility_bucket"),
+        "impulse_score": features.get("impulse_score"),
+        "reversal_score": features.get("reversal_score"),
+        # Свечной анализ
+        "candlestick_pattern": features.get("candlestick_pattern"),
+        "candlestick_score": features.get("candlestick_score"),
+        "candle_score_long": features.get("candle_score_long"),
+        "candle_score_short": features.get("candle_score_short"),
+        # FVG
+        "in_bullish_fvg": features.get("in_bullish_fvg"),
+        "in_bearish_fvg": features.get("in_bearish_fvg"),
+        "nearest_fvg": features.get("nearest_fvg"),
+        # Order Blocks
+        "in_bullish_ob": features.get("in_bullish_ob"),
+        "in_bearish_ob": features.get("in_bearish_ob"),
+        # Market Structure
+        "ms_structure": features.get("ms_structure"),
+        "ms_bos_bullish": features.get("ms_bos_bullish"),
+        "ms_bos_bearish": features.get("ms_bos_bearish"),
+        "ms_choch_bullish": features.get("ms_choch_bullish"),
+        "ms_choch_bearish": features.get("ms_choch_bearish"),
+        # SR уровни
+        "support_1": features.get("support_1"),
+        "resistance_1": features.get("resistance_1"),
+        "distance_to_support_pct": features.get("distance_to_support_pct"),
+        "distance_to_resistance_pct": features.get("distance_to_resistance_pct"),
+    }
 
     row = await db.fetchrow(
         """INSERT INTO crypto_demo_trades

@@ -377,6 +377,11 @@ async def check_entry(
         if direction == "long" and sr_signal not in ("bounce_support", "breakout_up"):
             return False, "", f"sideways_needs_support(sr={sr_signal})"
 
+    # В bull — только лонги, шорты запрещены
+    if market_mode == "bull":
+        if direction == "short":
+            return False, "", f"no_shorts_in_bull"
+
     # В bull_sideways — только лонги от поддержки, шорты запрещены
     if market_mode == "bull_sideways":
         if direction == "short":

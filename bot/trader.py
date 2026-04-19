@@ -310,6 +310,150 @@ def btc_move_allows_entry(
     return True, "ok"
 
 
+
+def detect_direction(features: dict, forecast: dict) -> tuple[str, str]:
+    """
+    Определяет направление входа на основе совокупности сигналов.
+    Возвращает (direction, reason) или ("", reason) если направление не определено.
+
+    Логика: считаем очки за каждый бычий/медвежий сигнал.
+    Если перевес > MIN_EDGE очков — входим в этом направлении.
+
+    Правило: SR говорит ГДЕ цена, остальные сигналы говорят КУДА пойдёт.
+    """
+    bull_score = 0
+    bear_score = 0
+    signals = []
+
+    sr = str(features.get("sr_signal") or "neutral")
+    candle = str(features.get("candlestick_pattern") or "none")
+    rsi = float(features.get("rsi_14") or 50)
+    r_1h = float(features.get("r_1h") or 0)
+    ms = str(features.get("ms_structure") or "ranging")
+    fib_zone = features.get("fib_zone")
+    fib_dir = features.get("fib_direction")
+    fib_sl = int(features.get("fib_score_long") or 0)
+    fib_ss = int(features.get("fib_score_short") or 0)
+    in_bull_fvg = bool(features.get("in_bullish_fvg"))
+    in_bear_fvg = bool(features.get("in_bearish_fvg"))
+    cs_long = int(features.get("candle_score_long") or 0)
+    cs_short = int(features.get("candle_score_short") or 0)
+    rs = float(features.get("relative_strength") or 0)
+
+    # 1. SR СИГНАЛ — контекст (не направление!)
+    # Пробои — сильный сигнал направления
+    if sr == "breakout_up":
+        bull_score += 30
+        signals.append("breakout_up")
+    elif sr == "breakout_down":
+        bear_score += 30
+        signals.append("breakout_down")
+    # Отскоки — слабый сигнал (требует подтверждения)
+    elif sr == "bounce_support":
+        bull_score += 10
+        signals.append("sr_support")
+    elif sr == "bounce_resistance":
+        bear_score += 10
+        signals.append("sr_resistance")
+
+    # 2. СВЕЧНОЙ ПАТТЕРН — сильный сигнал подтверждения
+    bullish_candles = ("rejection_low", "hammer", "inverted_hammer", "bullish_marubozu", "bullish_engulfing")
+    bearish_candles = ("rejection_high", "shooting_star", "hanging_man", "bearish_marubozu", "bearish_engulfing")
+
+    if candle in bullish_candles:
+        # Вес зависит от SR контекста
+        weight = 25 if sr == "bounce_support" else 15
+        bull_score += weight
+        signals.append(f"bullish_candle({candle})")
+    elif candle in bearish_candles:
+        weight = 25 if sr == "bounce_resistance" else 15
+        bear_score += weight
+        signals.append(f"bearish_candle({candle})")
+
+    # 3. RSI — подтверждение перекупленности/перепроданности
+    if rsi <= 30:
+        bull_score += 20
+        signals.append(f"oversold_rsi({rsi:.0f})")
+    elif rsi <= 40:
+        bull_score += 10
+        signals.append(f"low_rsi({rsi:.0f})")
+    elif rsi >= 70:
+        bear_score += 20
+        signals.append(f"overbought_rsi({rsi:.0f})")
+    elif rsi >= 60:
+        bear_score += 10
+        signals.append(f"high_rsi({rsi:.0f})")
+
+    # 4. ФИБОНАЧЧИ — определяет направление отката
+    if fib_zone and fib_dir:
+        if fib_dir == "bullish_retracement" and fib_sl > 0:
+            # Откат в бычьем тренде — продолжение вверх
+            weight = {"golden": 25, "half": 15, "shallow": 8, "deep": 10, "weak": 5}.get(fib_zone, 5)
+            bull_score += weight
+            signals.append(f"fib_{fib_zone}_bull")
+        elif fib_dir == "bearish_retracement" and fib_ss > 0:
+            # Откат в медвежьем тренде — продолжение вниз
+            weight = {"golden": 25, "half": 15, "shallow": 8, "deep": 10, "weak": 5}.get(fib_zone, 5)
+            bear_score += weight
+            signals.append(f"fib_{fib_zone}_bear")
+
+    # 5. FVG — цена в зоне дисбаланса
+    if in_bull_fvg:
+        bull_score += 20
+        signals.append("in_bullish_fvg")
+    if in_bear_fvg:
+        bear_score += 20
+        signals.append("in_bearish_fvg")
+
+    # 6. MARKET STRUCTURE — общий тренд
+    if ms == "uptrend":
+        bull_score += 10
+        signals.append("uptrend")
+    elif ms == "downtrend":
+        bear_score += 10
+        signals.append("downtrend")
+
+    # 7. ИМПУЛЬС 1H — краткосрочное давление
+    if r_1h >= 0.2:
+        bull_score += 10
+        signals.append(f"bull_momentum({r_1h:.2f}%)")
+    elif r_1h <= -0.2:
+        bear_score += 10
+        signals.append(f"bear_momentum({r_1h:.2f}%)")
+
+    # 8. RELATIVE STRENGTH vs BTC
+    if rs >= 0.5:
+        bull_score += 8
+        signals.append(f"strong_vs_btc({rs:.1f})")
+    elif rs <= -0.5:
+        bear_score += 8
+        signals.append(f"weak_vs_btc({rs:.1f})")
+
+    # Также учитываем forecaster как один из голосов
+    fc_dir = normalize_direction(forecast.get("direction"))
+    fc_prob = float(forecast.get("direction_probability") or 50)
+    if fc_dir == "long" and fc_prob >= 60:
+        bull_score += 8
+        signals.append(f"fc_up({fc_prob:.0f}%)")
+    elif fc_dir == "short" and fc_prob >= 60:
+        bear_score += 8
+        signals.append(f"fc_down({fc_prob:.0f}%)")
+
+    # Определяем направление
+    # Минимальный перевес для входа: 20 очков
+    MIN_EDGE = 20
+    edge = bull_score - bear_score
+
+    if edge >= MIN_EDGE:
+        reason = f"bull({bull_score}) vs bear({bear_score}): {','.join(signals[:4])}"
+        return "long", reason
+    elif edge <= -MIN_EDGE:
+        reason = f"bear({bear_score}) vs bull({bull_score}): {','.join(signals[:4])}"
+        return "short", reason
+    else:
+        return "", f"no_edge(bull={bull_score},bear={bear_score})"
+
+
 async def check_entry(
     features: dict,
     forecast: dict,
@@ -326,30 +470,16 @@ async def check_entry(
     except Exception:
         prob = 0.0
 
-    # Направление определяем из SR сигнала (надёжнее forecaster)
-    sr_signal_raw = str(features.get("sr_signal") or "neutral")
-    if sr_signal_raw in ("bounce_resistance", "breakout_down", "retest_broken_support_short"):
-        direction = "short"
-    elif sr_signal_raw in ("bounce_support", "breakout_up", "retest_broken_resistance_long"):
-        direction = "long"
-    else:
-        # Fallback на forecaster если нет SR сигнала
-        direction = normalize_direction(forecast.get("direction"))
-        if not direction:
-            return False, "", "neutral_forecast_no_sr"
+    # Направление определяем из совокупности сигналов
+    direction, dir_reason = detect_direction(features, forecast)
+    if not direction:
+        return False, "", f"no_direction({dir_reason})"
 
     volume = float(features.get("volume_24h") or 0)
     volume_bucket = str(features.get("volume_bucket") or volume_to_bucket(volume))
     volatility_bucket = str(features.get("volatility_bucket") or "unknown")
 
     # Минимальные фильтры (безопасность)
-    # prob_floor только если direction из forecaster (не из SR сигнала)
-    sr_sig_check = str(features.get("sr_signal") or "neutral")
-    sr_driven = sr_sig_check not in ("neutral",)
-    if not sr_driven:
-        min_prob_floor = float(params.get("min_prob_floor") or 55.0)
-        if prob < min_prob_floor:
-            return False, "", f"weak_prob_floor({prob:.1f}<{min_prob_floor:.1f})"
 
     if volume < 500_000:
         return False, "", f"low_volume({volume:.0f})"

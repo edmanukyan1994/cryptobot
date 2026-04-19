@@ -517,3 +517,10 @@ ML сигнал временно отключён (`ml_signal` вес = 0.00) п
 - Новые веса: sr_signal=0.30, candle=0.25, fvg_fib=0.15, rsi=0.12, rs=0.10, mom1h=0.05, vol=0.03
 - Добавлены колонки в БД: fib_level, fib_zone, fib_direction, fib_dist_pct, fib_score_long, fib_score_short
 - Исправлен критический баг: минимальный стоп 3% в bull_sideways не применялся когда SR переопределял стоп
+
+### 2026-04-19 (продолжение)
+- Добавлена функция `detect_direction()` — направление определяется из совокупности сигналов (свечи, RSI, Фибоначчи, FVG, MS, RS, forecaster) вместо только SR
+- Минимальный перевес для входа: 12 очков (bull_score - bear_score)
+- Добавлен жёсткий фильтр: `candle_score < -15` блокирует вход даже при положительном edge
+- Усилен штраф: `bearish_marubozu + bounce_support` при лонге → -25 очков
+- SR отскоки (`bounce_support/resistance`) больше не дают очков в `detect_direction` — слишком нестабильны между обновлениями

@@ -348,12 +348,11 @@ def detect_direction(features: dict, forecast: dict) -> tuple[str, str]:
     elif sr == "breakout_down":
         bear_score += 30
         signals.append("breakout_down")
-    # Отскоки — слабый сигнал (требует подтверждения)
+    # Отскоки — нейтральный контекст (только подтверждает свечу)
+    # Не даём очков т.к. SR нестабилен между обновлениями
     elif sr == "bounce_support":
-        bull_score += 10
         signals.append("sr_support")
     elif sr == "bounce_resistance":
-        bear_score += 10
         signals.append("sr_resistance")
 
     # 2. СВЕЧНОЙ ПАТТЕРН — сильный сигнал подтверждения

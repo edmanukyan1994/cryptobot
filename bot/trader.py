@@ -444,9 +444,15 @@ def detect_direction(features: dict, forecast: dict) -> tuple[str, str]:
     edge = bull_score - bear_score
 
     if edge >= MIN_EDGE:
+        # Блокируем если свечной скор сильно против лонга
+        if cs_long < -15:
+            return "", f"candle_blocks_long(cs={cs_long})"
         reason = f"bull({bull_score}) vs bear({bear_score}): {','.join(signals[:4])}"
         return "long", reason
     elif edge <= -MIN_EDGE:
+        # Блокируем если свечной скор сильно против шорта
+        if cs_short < -15:
+            return "", f"candle_blocks_short(cs={cs_short})"
         reason = f"bear({bear_score}) vs bull({bull_score}): {','.join(signals[:4])}"
         return "short", reason
     else:

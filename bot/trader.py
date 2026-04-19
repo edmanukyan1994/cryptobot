@@ -441,7 +441,7 @@ def detect_direction(features: dict, forecast: dict) -> tuple[str, str]:
 
     # Определяем направление
     # Минимальный перевес для входа: 20 очков
-    MIN_EDGE = 20
+    MIN_EDGE = 12
     edge = bull_score - bear_score
 
     if edge >= MIN_EDGE:

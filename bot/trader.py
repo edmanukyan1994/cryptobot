@@ -558,6 +558,15 @@ async def open_trade(
         sl_pct = (price - sl_price) / price * 100
 
     sl_pct = round(sl_pct, 2)
+
+    # Применяем минимальный стоп для bull_sideways (3%) даже если sr_sl_price был переопределён
+    min_sl = 3.0 if market_mode == "bull_sideways" else 0.5
+    if sl_pct < min_sl:
+        sl_pct = min_sl
+        if direction == "short":
+            sl_price = price * (1 + sl_pct / 100)
+        else:
+            sl_price = price * (1 - sl_pct / 100)
     tp1 = float(params.get("tp1_percent") or 2.0)
 
     # Всегда используем актуальные features (содержат candle_score, FVG, MS и т.д.)

@@ -360,15 +360,15 @@ async def check_entry(
     if volatility_bucket == "extreme":
         return False, "", "extreme_volatility"
 
+    sr_signal = str(features.get("sr_signal") or "neutral")
+    r_1h = float(features.get("r_1h") or 0)
+
     # Основное решение через скоринг
     scoring_should, scoring_score, scoring_reason = await scoring.should_enter(
         features, forecast, market_mode, direction
     )
     if not scoring_should:
         return False, "", f"scoring_reject({scoring_reason})"
-
-    sr_signal = str(features.get("sr_signal") or "neutral")
-    r_1h = float(features.get("r_1h") or 0)
 
     # В боковике — только от S/R уровней
     if market_mode == "bear_sideways":

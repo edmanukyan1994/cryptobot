@@ -364,7 +364,9 @@ def score_candle_for_direction(
                 score += 18
         elif candle_pattern in ("bearish_engulfing", "bearish_marubozu"):
             if sr_signal == "bounce_support":
-                score -= 12
+                score -= 25  # сильное противоречие — медвежья свеча у поддержки
+            elif sr_signal == "bounce_resistance":
+                score -= 5   # нейтрально — продолжение падения
             else:
                 score += 15
         elif candle_pattern == "doji":

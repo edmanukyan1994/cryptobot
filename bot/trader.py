@@ -530,6 +530,7 @@ async def open_trade(
     sr_data=None,
     setup_type="normal",
     sl_price_override=None,
+    market_mode="sideways",
 ):
     if not price or price <= 0:
         logger.warning(f"Invalid price {symbol}: {price}")
@@ -1114,6 +1115,7 @@ async def trading_cycle():
                 sr_data,
                 setup_type,
                 sr_sl_price,
+                market_mode=market_mode,
             )
             if trade:
                 new_trades += 1

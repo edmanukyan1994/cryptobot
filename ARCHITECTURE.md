@@ -508,3 +508,12 @@ ML сигнал временно отключён (`ml_signal` вес = 0.00) п
 - В `bull_sideways` запрещены лонги при `bearish_marubozu` и `shooting_star` — откатили (недостаточно данных, разница 19-30% не значима)
 - Исправлен критический баг: `market_mode is not defined` в `open_trade` — функция не получала `market_mode` как параметр
 - Исправлен порядок определения переменных в `check_entry` — `sr_signal` и `r_1h` теперь определяются до скоринга
+
+### 2026-04-19
+- Добавлен `detect_fibonacci()` в `candle_analysis.py` — определяет swing high/low за 50 свечей, считает уровни отката (0.236/0.382/0.5/0.618/0.786), зона ±1.5%
+- Скоринг переработан симметрично для лонгов и шортов
+- Новый фактор `fvg_fibonacci` (вес 0.15) объединяет FVG и Фибоначчи
+- Убран фактор `distance` — заменён на `candle_confirmation` + `fvg_fibonacci`
+- Новые веса: sr_signal=0.30, candle=0.25, fvg_fib=0.15, rsi=0.12, rs=0.10, mom1h=0.05, vol=0.03
+- Добавлены колонки в БД: fib_level, fib_zone, fib_direction, fib_dist_pct, fib_score_long, fib_score_short
+- Исправлен критический баг: минимальный стоп 3% в bull_sideways не применялся когда SR переопределял стоп

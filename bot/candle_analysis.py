@@ -1,5 +1,6 @@
 """
-Candle Analysis Module — FVG, Order Blocks, Market Structure
+Candle Analysis Module — FVG, Order Blocks, Market Structure, Fibonacci
+Полностью симметричный для лонгов и шортов.
 """
 
 
@@ -10,12 +11,10 @@ def detect_fvg(candles: list, current_price: float) -> dict:
         "in_bullish_fvg": False, "in_bearish_fvg": False,
         "nearest_fvg": None, "nearest_fvg_dist_pct": None,
     }
-
     if len(candles) < 3 or current_price <= 0:
         return result
 
     bullish_fvgs, bearish_fvgs = [], []
-
     for i in range(2, min(30, len(candles))):
         c0 = candles[-(i+1)]
         c2 = candles[-(i-1)]
@@ -63,13 +62,162 @@ def detect_fvg(candles: list, current_price: float) -> dict:
     return result
 
 
+def detect_fibonacci(candles: list, current_price: float) -> dict:
+    """
+    Фибоначчи — определяет уровни отката от последнего значимого движения.
+
+    Алгоритм:
+    1. Находим последний swing high и swing low за 50 свечей
+    2. Определяем направление движения (импульс вверх или вниз)
+    3. Считаем уровни отката: 0.236, 0.382, 0.5, 0.618, 0.786
+    4. Определяем в какой зоне сейчас цена (±1.5% от уровня = зона)
+
+    Для лонга: ищем откат вниз после импульса вверх (цена у 0.618 = хорошая точка входа в лонг)
+    Для шорта: ищем откат вверх после импульса вниз (цена у 0.618 = хорошая точка входа в шорт)
+
+    Возвращает:
+    - fib_level: ближайший уровень (0.236/0.382/0.5/0.618/0.786/None)
+    - fib_dist_pct: расстояние до ближайшего уровня в %
+    - fib_zone: "golden" (0.618±1.5%), "half" (0.5±1.5%), "shallow" (0.382±1.5%), "deep" (0.786±1.5%), None
+    - fib_direction: "bullish_retracement" (откат в бычьем движении) / "bearish_retracement" / None
+    - swing_high: последний swing high
+    - swing_low: последний swing low
+    """
+    result = {
+        "fib_level": None,
+        "fib_dist_pct": None,
+        "fib_zone": None,
+        "fib_direction": None,
+        "swing_high": None,
+        "swing_low": None,
+        "fib_score_long": 0,
+        "fib_score_short": 0,
+    }
+
+    if len(candles) < 10 or current_price <= 0:
+        return result
+
+    lookback = min(50, len(candles))
+    recent = candles[-lookback:]
+
+    # Находим swing high и swing low за последние 50 свечей
+    swing_size = 3  # минимум 3 свечи слева и справа для подтверждения
+    swing_highs = []
+    swing_lows = []
+
+    for i in range(swing_size, len(recent) - swing_size):
+        c = recent[i]
+        h = float(c["high"])
+        l = float(c["low"])
+
+        # Swing high: максимум среди swing_size соседних свечей
+        if h == max(float(recent[i+j]["high"]) for j in range(-swing_size, swing_size+1)):
+            swing_highs.append({"price": h, "idx": i})
+
+        # Swing low: минимум среди swing_size соседних свечей
+        if l == min(float(recent[i+j]["low"]) for j in range(-swing_size, swing_size+1)):
+            swing_lows.append({"price": l, "idx": i})
+
+    if not swing_highs or not swing_lows:
+        return result
+
+    # Берём последний swing high и swing low
+    last_high = swing_highs[-1]
+    last_low = swing_lows[-1]
+
+    result["swing_high"] = round(last_high["price"], 8)
+    result["swing_low"] = round(last_low["price"], 8)
+
+    swing_range = last_high["price"] - last_low["price"]
+    if swing_range <= 0:
+        return result
+
+    # Определяем направление последнего импульса
+    # Если swing high после swing low → импульс вверх → ищем откат вниз (для лонга)
+    # Если swing low после swing high → импульс вниз → ищем откат вверх (для шорта)
+
+    FIB_LEVELS = [0.236, 0.382, 0.5, 0.618, 0.786]
+    FIB_ZONE_PCT = 1.5  # ±1.5% от уровня считается зоной
+
+    if last_high["idx"] > last_low["idx"]:
+        # Импульс вверх: high после low
+        # Откат вниз: уровни считаются от high вниз к low
+        # Fib 0.618 = high - 0.618 * range
+        result["fib_direction"] = "bullish_retracement"
+        fib_prices = {
+            level: last_high["price"] - level * swing_range
+            for level in FIB_LEVELS
+        }
+    else:
+        # Импульс вниз: low после high
+        # Откат вверх: уровни считаются от low вверх к high
+        # Fib 0.618 = low + 0.618 * range
+        result["fib_direction"] = "bearish_retracement"
+        fib_prices = {
+            level: last_low["price"] + level * swing_range
+            for level in FIB_LEVELS
+        }
+
+    # Находим ближайший уровень к текущей цене
+    min_dist = float('inf')
+    nearest_level = None
+    nearest_price = None
+
+    for level, price in fib_prices.items():
+        dist_pct = abs(current_price - price) / current_price * 100
+        if dist_pct < min_dist:
+            min_dist = dist_pct
+            nearest_level = level
+            nearest_price = price
+
+    result["fib_level"] = nearest_level
+    result["fib_dist_pct"] = round(min_dist, 3)
+
+    # Определяем зону (±1.5%)
+    if min_dist <= FIB_ZONE_PCT:
+        if abs(nearest_level - 0.618) < 0.05:
+            result["fib_zone"] = "golden"   # самая сильная зона
+        elif abs(nearest_level - 0.5) < 0.05:
+            result["fib_zone"] = "half"
+        elif abs(nearest_level - 0.382) < 0.05:
+            result["fib_zone"] = "shallow"
+        elif abs(nearest_level - 0.786) < 0.05:
+            result["fib_zone"] = "deep"
+        elif abs(nearest_level - 0.236) < 0.05:
+            result["fib_zone"] = "weak"
+
+    # Считаем скор для лонга и шорта
+    # Для лонга: bullish_retracement + цена у 0.618 = хорошо (цена откатилась и готова расти)
+    # Для шорта: bearish_retracement + цена у 0.618 = хорошо (цена откатилась и готова падать)
+
+    zone_scores = {
+        "golden": 25,  # 0.618 — самый сильный уровень
+        "half":   15,  # 0.5
+        "shallow": 8,  # 0.382
+        "deep":   10,  # 0.786
+        "weak":    5,  # 0.236
+    }
+
+    zone_score = zone_scores.get(result["fib_zone"], 0)
+
+    if result["fib_direction"] == "bullish_retracement":
+        # Цена откатилась в бычьем тренде — хорошо для лонга
+        result["fib_score_long"] = zone_score
+        result["fib_score_short"] = -zone_score // 2  # плохо для шорта
+    elif result["fib_direction"] == "bearish_retracement":
+        # Цена откатилась в медвежьем тренде — хорошо для шорта
+        result["fib_score_short"] = zone_score
+        result["fib_score_long"] = -zone_score // 2  # плохо для лонга
+
+    return result
+
+
 def detect_order_blocks(candles: list, current_price: float) -> dict:
     """Order Blocks — зоны крупных позиций."""
     result = {
         "bullish_ob": None, "bearish_ob": None,
         "in_bullish_ob": False, "in_bearish_ob": False,
     }
-
     if len(candles) < 5 or current_price <= 0:
         return result
 
@@ -86,7 +234,6 @@ def detect_order_blocks(candles: list, current_price: float) -> dict:
         if not next_slice:
             continue
 
-        # Bullish OB: медвежья свеча + импульс вверх после
         if cl < o:
             future_high = max(float(nc["high"]) for nc in next_slice)
             if future_high - h >= min_impulse:
@@ -98,7 +245,6 @@ def detect_order_blocks(candles: list, current_price: float) -> dict:
                         "mid": round(mid,8), "dist_pct": round(dist,3), "ago": i}
                     result["in_bullish_ob"] = in_ob
 
-        # Bearish OB: бычья свеча + импульс вниз после
         if cl > o:
             future_low = min(float(nc["low"]) for nc in next_slice)
             if l - future_low >= min_impulse:
@@ -121,7 +267,6 @@ def detect_market_structure(candles: list, current_price: float) -> dict:
         "bos_bullish": False, "bos_bearish": False,
         "choch_bullish": False, "choch_bearish": False,
     }
-
     if len(candles) < 20 or current_price <= 0:
         return result
 
@@ -180,96 +325,118 @@ def score_candle_for_direction(
     order_blocks: dict,
     market_structure: dict,
     is_long: bool,
+    fibonacci: dict = None,
 ) -> int:
-    """Комплексная оценка свечного анализа (-50..100)."""
+    """
+    Комплексная оценка свечного анализа + FVG + OB + MS + Фибоначчи.
+    Полностью симметрична для лонгов и шортов.
+    Возвращает очки -50..100.
+    """
     score = 0
 
-    # 1. Свечной паттерн
+    # 1. СВЕЧНОЙ ПАТТЕРН (базовый сигнал)
     if is_long:
         if candle_pattern in ("rejection_low", "hammer", "inverted_hammer"):
             if sr_signal == "bounce_support":
-                score += 60  # идеальное совпадение
+                score += 30   # идеальное совпадение
             elif sr_signal == "bounce_resistance":
-                score -= 30  # противоречие — свеча бычья но SR медвежий
+                score -= 20   # противоречие
             else:
-                score += 35
+                score += 18
         elif candle_pattern in ("bullish_engulfing", "bullish_marubozu"):
             if sr_signal == "bounce_resistance":
-                score -= 20  # слабое противоречие
+                score -= 12
             else:
-                score += 30
+                score += 15
         elif candle_pattern == "doji":
-            score += 5
+            score += 3
         elif candle_pattern in ("rejection_high", "shooting_star", "hanging_man"):
-            score -= 30
+            score -= 20
         elif candle_pattern in ("bearish_engulfing", "bearish_marubozu"):
-            score -= 40
+            score -= 25
     else:
         if candle_pattern in ("rejection_high", "shooting_star", "hanging_man"):
             if sr_signal == "bounce_resistance":
-                score += 60  # идеальное совпадение
+                score += 30   # идеальное совпадение
             elif sr_signal == "bounce_support":
-                score -= 30  # противоречие — свеча медвежья но SR бычий
+                score -= 20   # противоречие
             else:
-                score += 35  # нет SR, но свеча медвежья
+                score += 18
         elif candle_pattern in ("bearish_engulfing", "bearish_marubozu"):
             if sr_signal == "bounce_support":
-                score -= 20  # слабое противоречие
+                score -= 12
             else:
-                score += 30
+                score += 15
         elif candle_pattern == "doji":
-            score += 5
+            score += 3
         elif candle_pattern in ("rejection_low", "hammer", "inverted_hammer"):
-            score -= 30
+            score -= 20
         elif candle_pattern in ("bullish_engulfing", "bullish_marubozu"):
-            score -= 40
+            score -= 25
 
-    # 2. FVG
+    # 2. FVG — симметрично
     if fvg:
         if is_long:
             if fvg.get("in_bullish_fvg"):
-                score += 25
+                score += 20
             elif fvg.get("bullish_fvg") and (fvg["bullish_fvg"].get("dist_pct") or 99) < 1.0:
-                score += 12
+                score += 10
+            # Штраф если цена в медвежьем FVG при лонге
+            if fvg.get("in_bearish_fvg"):
+                score -= 10
         else:
             if fvg.get("in_bearish_fvg"):
-                score += 25
+                score += 20
             elif fvg.get("bearish_fvg") and (fvg["bearish_fvg"].get("dist_pct") or 99) < 1.0:
-                score += 12
+                score += 10
+            # Штраф если цена в бычьем FVG при шорте
+            if fvg.get("in_bullish_fvg"):
+                score -= 10
 
-    # 3. Order Blocks
+    # 3. ORDER BLOCKS — симметрично
     if order_blocks:
         if is_long:
             if order_blocks.get("in_bullish_ob"):
-                score += 20
+                score += 15
             elif order_blocks.get("bullish_ob") and (order_blocks["bullish_ob"].get("dist_pct") or 99) < 1.0:
-                score += 10
+                score += 8
+            if order_blocks.get("in_bearish_ob"):
+                score -= 8
         else:
             if order_blocks.get("in_bearish_ob"):
-                score += 20
+                score += 15
             elif order_blocks.get("bearish_ob") and (order_blocks["bearish_ob"].get("dist_pct") or 99) < 1.0:
-                score += 10
+                score += 8
+            if order_blocks.get("in_bullish_ob"):
+                score -= 8
 
-    # 4. Market Structure
+    # 4. MARKET STRUCTURE — симметрично
     if market_structure:
         struct = market_structure.get("structure", "ranging")
         if is_long:
             if market_structure.get("bos_bullish"):
-                score += 15
+                score += 12
             elif market_structure.get("choch_bullish"):
-                score += 8
+                score += 6
             elif struct == "uptrend":
-                score += 10
+                score += 8
             elif struct == "downtrend":
-                score -= 10
+                score -= 8
         else:
             if market_structure.get("bos_bearish"):
-                score += 15
+                score += 12
             elif market_structure.get("choch_bearish"):
-                score += 8
+                score += 6
             elif struct == "downtrend":
-                score += 10
+                score += 8
             elif struct == "uptrend":
-                score -= 10
+                score -= 8
+
+    # 5. ФИБОНАЧЧИ — симметрично
+    if fibonacci:
+        if is_long:
+            score += fibonacci.get("fib_score_long", 0)
+        else:
+            score += fibonacci.get("fib_score_short", 0)
 
     return max(-50, min(100, score))

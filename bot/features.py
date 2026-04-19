@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from config import bybit_symbol, FEATURE_INTERVAL
 import db
 from market_context import get_context
-from candle_analysis import detect_fvg, detect_order_blocks, detect_market_structure, score_candle_for_direction
+from candle_analysis import detect_fvg, detect_order_blocks, detect_market_structure, detect_fibonacci, score_candle_for_direction
 
 logger = logging.getLogger("features")
 BYBIT_BASE = "https://api.bybit.com"
@@ -575,6 +575,7 @@ async def build_features(session, symbol: str):
     fvg_data = detect_fvg(closed_klines, current) if closed_klines else {}
     ob_data = detect_order_blocks(closed_klines, current) if closed_klines else {}
     ms_data = detect_market_structure(closed_klines, current) if closed_klines else {}
+    fib_data = detect_fibonacci(closed_klines, current) if closed_klines else {}
     # Примечание: score_candle вызывается ПОСЛЕ вычисления sr_sig ниже
 
     # S/R анализ через текущий sr_engine
@@ -620,11 +621,13 @@ async def build_features(session, symbol: str):
     try:
         candle_score_long = score_candle_for_direction(
             candle_pattern, float(candle_score or 0),
-            sr_sig, fvg_data, ob_data, ms_data, is_long=True
+            sr_sig, fvg_data, ob_data, ms_data, is_long=True,
+            fibonacci=fib_data
         )
         candle_score_short = score_candle_for_direction(
             candle_pattern, float(candle_score or 0),
-            sr_sig, fvg_data, ob_data, ms_data, is_long=False
+            sr_sig, fvg_data, ob_data, ms_data, is_long=False,
+            fibonacci=fib_data
         )
         if candle_score_long != 0 or candle_score_short != 0:
             logger.info(f"Candle score {symbol}: {candle_pattern}+{sr_sig} → long={candle_score_long} short={candle_score_short}")
@@ -725,6 +728,13 @@ async def build_features(session, symbol: str):
         "ms_bos_bearish": ms_data.get("bos_bearish", False),
         "ms_choch_bullish": ms_data.get("choch_bullish", False),
         "ms_choch_bearish": ms_data.get("choch_bearish", False),
+        # Фибоначчи
+        "fib_level": fib_data.get("fib_level"),
+        "fib_zone": fib_data.get("fib_zone"),
+        "fib_direction": fib_data.get("fib_direction"),
+        "fib_dist_pct": fib_data.get("fib_dist_pct"),
+        "fib_score_long": fib_data.get("fib_score_long", 0),
+        "fib_score_short": fib_data.get("fib_score_short", 0),
     }
 
 
@@ -759,7 +769,8 @@ async def run_features_builder():
                                     candle_score_long, candle_score_short,
                                     in_bullish_fvg, in_bearish_fvg, nearest_fvg, nearest_fvg_dist_pct,
                                     in_bullish_ob, in_bearish_ob,
-                                    ms_structure, ms_bos_bullish, ms_bos_bearish, ms_choch_bullish, ms_choch_bearish
+                                    ms_structure, ms_bos_bullish, ms_bos_bearish, ms_choch_bullish, ms_choch_bearish,
+                                    fib_level, fib_zone, fib_direction, fib_dist_pct, fib_score_long, fib_score_short
                                 )
                                 VALUES
                                 (
@@ -776,7 +787,8 @@ async def run_features_builder():
                                     $42,$43,
                                     $44,$45,$46,$47,
                                     $48,$49,
-                                    $50,$51,$52,$53,$54
+                                    $50,$51,$52,$53,$54,
+                                    $55,$56,$57,$58,$59,$60
                                 )
                                 """,
                                 f["symbol"], f["ts"], f["price"], f["volume_24h"], f["r_1h"], f["r_24h"], f["rsi_14"],
@@ -799,6 +811,8 @@ async def run_features_builder():
                                 f.get("ms_structure", "ranging"),
                                 f.get("ms_bos_bullish", False), f.get("ms_bos_bearish", False),
                                 f.get("ms_choch_bullish", False), f.get("ms_choch_bearish", False),
+                                f.get("fib_level"), f.get("fib_zone"), f.get("fib_direction"),
+                                f.get("fib_dist_pct"), f.get("fib_score_long", 0), f.get("fib_score_short", 0),
                             )
                             built += 1
                     except Exception as e:

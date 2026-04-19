@@ -1,7 +1,12 @@
 """
-Scoring Module — система весов для принятия торговых решений.
+Scoring Module v2 — переработанная система скоринга.
 
-Веса хранятся в БД в таблице crypto_scoring_weights.
+Ключевые изменения:
+- Симметричная система для лонгов и шортов
+- Фибоначчи как отдельный фактор
+- FVG получает собственный вес в скоринге
+- Упрощённые веса без distance (заменён на candle+fvg+fib)
+- Порог входа 55 (жёстче — требует больше подтверждений)
 """
 
 import logging
@@ -11,26 +16,21 @@ import db
 
 logger = logging.getLogger("scoring")
 
-# Кэш для весов (обновляется раз в минуту)
 _weights_cache = None
 _weights_cache_time = None
 
 
 async def get_weights() -> dict:
-    """Загружает веса из БД с кэшированием."""
     global _weights_cache, _weights_cache_time
     import time
-    
     now = time.time()
     if _weights_cache is not None and _weights_cache_time is not None and (now - _weights_cache_time) < 60:
         return _weights_cache
-    
     try:
         row = await db.fetchrow("SELECT weights, entry_threshold FROM crypto_scoring_weights WHERE id='current'")
         if row:
             import json as _json
             raw_weights = row["weights"]
-            # weights может прийти как строка JSON или как dict
             if isinstance(raw_weights, str):
                 raw_weights = _json.loads(raw_weights)
             weights_float = {k: float(v) for k, v in raw_weights.items()}
@@ -42,180 +42,156 @@ async def get_weights() -> dict:
             return _weights_cache
     except Exception as e:
         logger.warning(f"Failed to load scoring weights from DB: {e}")
-    
-    # Fallback веса (добавлен ml_signal)
+
+    # Fallback — новые веса
     return {
         "weights": {
-            "distance": 0.20,
-            "rsi": 0.10,
-            "momentum_1h": 0.15,
-            "momentum_24h": 0.10,
-            "volume": 0.10,
-            "sr_signal": 0.15,
-            "relative_strength": 0.10,
-            "market_mode": 0.10,
-            "ml_signal": 0.15,
+            "sr_signal":           0.30,
+            "candle_confirmation": 0.25,
+            "fvg_fibonacci":       0.15,
+            "rsi":                 0.12,
+            "relative_strength":   0.10,
+            "momentum_1h":         0.05,
+            "volume":              0.03,
+            "ml_signal":           0.00,
         },
-        "entry_threshold": 50,
+        "entry_threshold": 45,
     }
 
 
 async def get_entry_threshold() -> int:
-    """Возвращает порог входа из БД."""
     weights = await get_weights()
-    return weights.get("entry_threshold", 50)
-
-
-def _score_distance(dist: Optional[float], is_long: bool) -> int:
-    """Оценивает расстояние до уровня (0-100)."""
-    if dist is None:
-        return 0
-    if dist <= 0.5:  return 100
-    elif dist <= 1.0: return 75
-    elif dist <= 2.0: return 50
-    elif dist <= 3.0: return 25
-    return 0
+    return weights.get("entry_threshold", 45)
 
 
 def _score_rsi(rsi: Optional[float], is_long: bool) -> int:
-    """Оценивает RSI (0-100)."""
+    """RSI — симметрично для лонга и шорта."""
     if rsi is None:
         return 0
     if is_long:
-        if rsi <= 20:   return 100
-        elif rsi <= 30: return 70
-        elif rsi <= 40: return 30
-        elif rsi >= 80: return -50
-        elif rsi >= 70: return -30
+        if rsi <= 20:    return 100
+        elif rsi <= 30:  return 75
+        elif rsi <= 40:  return 40
+        elif rsi <= 50:  return 10
+        elif rsi >= 80:  return -60
+        elif rsi >= 70:  return -30
+        elif rsi >= 60:  return -10
     else:
-        if rsi >= 80:   return 100
-        elif rsi >= 70: return 70
-        elif rsi >= 60: return 30
-        elif rsi <= 20: return -50
-        elif rsi <= 30: return -30
+        if rsi >= 80:    return 100
+        elif rsi >= 70:  return 75
+        elif rsi >= 60:  return 40
+        elif rsi >= 50:  return 10
+        elif rsi <= 20:  return -60
+        elif rsi <= 30:  return -30
+        elif rsi <= 40:  return -10
     return 0
 
 
 def _score_momentum_1h(r_1h: Optional[float], is_long: bool) -> int:
-    """Оценивает импульс за час (0-100)."""
+    """Импульс за час — симметрично."""
     if r_1h is None:
         return 0
     if is_long:
-        if r_1h >= 0.5:   return 100
-        elif r_1h >= 0.2: return 70
-        elif r_1h >= 0.05: return 30
-        elif r_1h <= -0.5: return -70
+        if r_1h >= 0.3:    return 80
+        elif r_1h >= 0.1:  return 40
+        elif r_1h >= 0.0:  return 10
+        elif r_1h <= -0.5: return -60
         elif r_1h <= -0.2: return -30
+        elif r_1h <= -0.1: return -10
     else:
-        if r_1h <= -0.5:   return 100
-        elif r_1h <= -0.2: return 70
-        elif r_1h <= -0.05: return 30
-        elif r_1h >= 0.5:  return -70
+        if r_1h <= -0.3:   return 80
+        elif r_1h <= -0.1: return 40
+        elif r_1h <= 0.0:  return 10
+        elif r_1h >= 0.5:  return -60
         elif r_1h >= 0.2:  return -30
-    return 0
-
-
-def _score_momentum_24h(r_24h: Optional[float], is_long: bool) -> int:
-    """Оценивает импульс за 24 часа (0-100)."""
-    if r_24h is None:
-        return 0
-    if is_long:
-        if r_24h >= 2.0:   return 100
-        elif r_24h >= 1.0: return 50
-        elif r_24h <= -3.0: return -100
-        elif r_24h <= -2.0: return -50
-    else:
-        if r_24h <= -2.0:  return 100
-        elif r_24h <= -1.0: return 50
-        elif r_24h >= 3.0:  return -100
-        elif r_24h >= 2.0:  return -50
+        elif r_1h >= 0.1:  return -10
     return 0
 
 
 def _score_volume(volume_bucket: str) -> int:
-    """Оценивает объём торгов (0-100)."""
-    if volume_bucket == "ultra":   return 100
-    elif volume_bucket == "high":  return 75
+    """Объём торгов."""
+    if volume_bucket == "ultra":    return 100
+    elif volume_bucket == "high":   return 75
     elif volume_bucket == "medium": return 50
-    elif volume_bucket == "low":   return 20
-    elif volume_bucket == "trash": return -100
+    elif volume_bucket == "low":    return 20
+    elif volume_bucket == "trash":  return -100
     return 0
 
 
 def _score_sr_signal(sr_signal: str, is_long: bool) -> int:
-    """Оценивает S/R сигнал (0-100)."""
+    """SR сигнал — симметрично."""
     if is_long:
-        if sr_signal == "bounce_support":                return 100
-        elif sr_signal == "breakout_up":                 return 80
+        if sr_signal == "bounce_support":                  return 100
+        elif sr_signal == "breakout_up":                   return 80
         elif sr_signal == "retest_broken_resistance_long": return 60
-        elif sr_signal == "breakout_down":               return -80
-        elif sr_signal == "bounce_resistance":           return -50
+        elif sr_signal == "neutral":                       return 0
+        elif sr_signal == "breakout_down":                 return -80
+        elif sr_signal == "bounce_resistance":             return -60
     else:
-        if sr_signal == "bounce_resistance":             return 100
-        elif sr_signal == "breakout_down":               return 80
-        elif sr_signal == "retest_broken_support_short": return 60
-        elif sr_signal == "breakout_up":                 return -80
-        elif sr_signal == "bounce_support":              return -50
+        if sr_signal == "bounce_resistance":               return 100
+        elif sr_signal == "breakout_down":                 return 80
+        elif sr_signal == "retest_broken_support_short":   return 60
+        elif sr_signal == "neutral":                       return 0
+        elif sr_signal == "breakout_up":                   return -80
+        elif sr_signal == "bounce_support":                return -60
     return 0
 
 
 def _score_relative_strength(rs: Optional[float], is_long: bool) -> int:
-    """Оценивает относительную силу к BTC (0-100)."""
+    """Относительная сила vs BTC — симметрично."""
     if rs is None:
         return 0
     if is_long:
-        if rs >= 2.0:   return 100
-        elif rs >= 1.0: return 70
-        elif rs >= 0.5: return 30
-        elif rs <= -1.0: return -50
-        elif rs <= -0.5: return -30
+        if rs >= 2.0:    return 100
+        elif rs >= 1.0:  return 70
+        elif rs >= 0.3:  return 30
+        elif rs <= -2.0: return -60
+        elif rs <= -1.0: return -40
+        elif rs <= -0.3: return -20
     else:
-        if rs <= -2.0:  return 100
+        if rs <= -2.0:   return 100
         elif rs <= -1.0: return 70
-        elif rs <= -0.5: return 30
-        elif rs >= 1.0:  return -50
-        elif rs >= 0.5:  return -30
+        elif rs <= -0.3: return 30
+        elif rs >= 2.0:  return -60
+        elif rs >= 1.0:  return -40
+        elif rs >= 0.3:  return -20
     return 0
 
 
-def _score_market_mode(market_mode: str, is_long: bool) -> int:
-    """Оценивает режим рынка (0-100). Только бонус, без штрафа."""
+def _score_fvg_fibonacci(features: dict, is_long: bool) -> int:
+    """
+    Комбинированный скор FVG + Фибоначчи.
+    Объединяем в один фактор т.к. оба указывают на зоны дисбаланса/отката.
+    Симметрично для лонга и шорта.
+    """
+    score = 0
+
+    # FVG
     if is_long:
-        if market_mode == "bull":            return 100
-        elif market_mode == "bull_sideways": return 70
-        elif market_mode == "sideways":      return 40
-        elif market_mode == "bear_sideways": return 10
-        elif market_mode == "bear":          return 0
+        if features.get("in_bullish_fvg"):
+            score += 60
+        elif (features.get("nearest_fvg") == "bullish" and
+              (features.get("nearest_fvg_dist_pct") or 99) < 1.5):
+            score += 30
+        if features.get("in_bearish_fvg"):
+            score -= 20
     else:
-        if market_mode == "bear":            return 100
-        elif market_mode == "bear_sideways": return 70
-        elif market_mode == "sideways":      return 40
-        elif market_mode == "bull_sideways": return 10
-        elif market_mode == "bull":          return 0
-    return 0
+        if features.get("in_bearish_fvg"):
+            score += 60
+        elif (features.get("nearest_fvg") == "bearish" and
+              (features.get("nearest_fvg_dist_pct") or 99) < 1.5):
+            score += 30
+        if features.get("in_bullish_fvg"):
+            score -= 20
 
+    # Фибоначчи
+    fib_score = features.get("fib_score_long") if is_long else features.get("fib_score_short")
+    if fib_score:
+        # Конвертируем fib_score (-25..25) в 0..100 шкалу
+        # fib_score_long: 0-25 (bullish retracement) или отрицательный (bearish)
+        score += int(fib_score) * 2  # максимум +50 от Фибо
 
-
-def _score_candle_confirmation(candle_pattern: str, candle_score: float, sr_signal: str, is_long: bool) -> int:
-    """Упрощённая оценка — используем candle_score_long/short из features."""
-    if not candle_pattern or candle_pattern == "none":
-        return 0
-    if is_long:
-        if candle_pattern in ("rejection_low", "hammer", "inverted_hammer"):
-            return 100 if sr_signal == "bounce_support" else 60
-        elif candle_pattern in ("bullish_engulfing", "bullish_marubozu"):
-            return 50
-        elif candle_pattern in ("rejection_high", "shooting_star", "bearish_engulfing"):
-            return -50
-    else:
-        if candle_pattern in ("rejection_high", "shooting_star", "hanging_man"):
-            return 100 if sr_signal == "bounce_resistance" else 60
-        elif candle_pattern in ("bearish_engulfing", "bearish_marubozu"):
-            return 50
-        elif candle_pattern in ("rejection_low", "hammer", "bullish_engulfing"):
-            return -50
-    return 0
-
+    return max(-100, min(100, score))
 
 
 async def calculate_score(features: dict, direction: str, market_mode: str, ml_forecast: dict = None) -> int:
@@ -223,7 +199,7 @@ async def calculate_score(features: dict, direction: str, market_mode: str, ml_f
     weights_data = await get_weights()
     weights = weights_data["weights"]
 
-    # Конвертируем asyncpg Record в dict если нужно
+    # Конвертируем asyncpg Record в dict
     if not isinstance(features, dict):
         try:
             features = dict(features)
@@ -234,33 +210,29 @@ async def calculate_score(features: dict, direction: str, market_mode: str, ml_f
         try: return float(v) if v is not None else None
         except: return None
 
-    dist = _f(features.get("distance_to_support_pct") if is_long else features.get("distance_to_resistance_pct"))
     rsi = _f(features.get("rsi_14"))
     r_1h = _f(features.get("r_1h"))
-    r_24h = _f(features.get("r_24h"))
-    volume_bucket = features.get("volume_bucket") or "low"
-    sr_signal = features.get("sr_signal") or "neutral"
+    volume_bucket = str(features.get("volume_bucket") or "low")
+    sr_signal = str(features.get("sr_signal") or "neutral")
     rs = _f(features.get("relative_strength"))
 
-    candle_pattern = str(features.get("candlestick_pattern") or "none")
-    candle_score_val = float(features.get("candlestick_score") or 0)
-
-    # Получаем готовый свечной скор из features (включает FVG + OB + MS)
+    # Свечной скор (уже вычислен в features включая FVG+OB+MS)
     if is_long:
-        candle_composite = int(features.get("candle_score_long") or
-            _score_candle_confirmation(candle_pattern, candle_score_val, sr_signal, is_long))
+        candle_composite = int(features.get("candle_score_long") or 0)
     else:
-        candle_composite = int(features.get("candle_score_short") or
-            _score_candle_confirmation(candle_pattern, candle_score_val, sr_signal, is_long))
+        candle_composite = int(features.get("candle_score_short") or 0)
+
+    # FVG + Fibonacci комбинированный скор
+    fvg_fib_score = _score_fvg_fibonacci(features, is_long)
 
     scores = {
-        "sr_signal":            _score_sr_signal(sr_signal, is_long),
-        "candle_confirmation":  candle_composite,
-        "momentum_1h":          _score_momentum_1h(r_1h, is_long),
-        "rsi":                  _score_rsi(rsi, is_long),
-        "relative_strength":    _score_relative_strength(rs, is_long),
-        "volume":               _score_volume(volume_bucket),
-        "momentum_24h":         _score_momentum_24h(r_24h, is_long),
+        "sr_signal":           _score_sr_signal(sr_signal, is_long),
+        "candle_confirmation": candle_composite,
+        "fvg_fibonacci":       fvg_fib_score,
+        "rsi":                 _score_rsi(rsi, is_long),
+        "relative_strength":   _score_relative_strength(rs, is_long),
+        "momentum_1h":         _score_momentum_1h(r_1h, is_long),
+        "volume":              _score_volume(volume_bucket),
     }
 
     # ML фактор
@@ -276,10 +248,10 @@ async def calculate_score(features: dict, direction: str, market_mode: str, ml_f
             ml_score = -15
     scores["ml_signal"] = ml_score
 
-    # Базовый скор (без market_mode)
+    # Базовый скор
     base_score = sum(float(score) * float(weights.get(factor, 0.0)) for factor, score in scores.items())
 
-    # market_mode как мультипликатор
+    # market_mode мультипликатор — симметрично
     if is_long:
         if market_mode == "bull":            mult = 1.2
         elif market_mode == "bull_sideways": mult = 1.1
@@ -294,7 +266,7 @@ async def calculate_score(features: dict, direction: str, market_mode: str, ml_f
         else:                                mult = 0.8
 
     final_score = min(100, max(0, int(base_score * mult)))
-    logger.debug(f"Score {direction}: {final_score} (base={base_score:.1f} mult={mult}) | factors={scores}")
+    logger.debug(f"Score {direction}: {final_score} (base={base_score:.1f} mult={mult}) | {scores}")
     return final_score
 
 
@@ -308,6 +280,7 @@ async def should_enter_long(features: dict, forecast: dict, market_mode: str) ->
     dist = float(features.get("distance_to_support_pct")) if features.get("distance_to_support_pct") is not None else None
     volume_bucket = features.get("volume_bucket") or "low"
 
+    # Экстремальная перепроданность у уровня — приоритетный вход
     if rsi is not None and rsi <= 20 and dist is not None and dist <= 0.5:
         if volume_bucket not in ("trash", "low"):
             return True, score, f"extreme_oversold_rsi={rsi:.1f}_dist={dist:.2f}"
@@ -318,7 +291,7 @@ async def should_enter_long(features: dict, forecast: dict, market_mode: str) ->
     if ml_dir in ("up", "neutral", None):
         if score >= threshold:
             return True, score, f"score={score}_ml={ml_dir}({ml_prob:.0f})"
-        elif score >= threshold - 10 and ml_prob >= 60:
+        elif score >= threshold - 8 and ml_prob >= 65:
             return True, score, f"score={score}_ml_boost"
 
     return False, score, f"score={score}<{threshold}_or_dir={ml_dir}"
@@ -334,6 +307,7 @@ async def should_enter_short(features: dict, forecast: dict, market_mode: str) -
     dist = float(features.get("distance_to_resistance_pct")) if features.get("distance_to_resistance_pct") is not None else None
     volume_bucket = features.get("volume_bucket") or "low"
 
+    # Экстремальная перекупленность у уровня — приоритетный вход
     if rsi is not None and rsi >= 80 and dist is not None and dist <= 0.5:
         if volume_bucket not in ("trash", "low"):
             return True, score, f"extreme_overbought_rsi={rsi:.1f}_dist={dist:.2f}"
@@ -341,11 +315,10 @@ async def should_enter_short(features: dict, forecast: dict, market_mode: str) -
     ml_dir = (ml_prediction or {}).get("direction")
     ml_prob = float((ml_prediction or {}).get("direction_probability") or 0)
 
-
     if ml_dir in ("down", "neutral", None):
         if score >= threshold:
             return True, score, f"score={score}_ml={ml_dir}({ml_prob:.0f})"
-        elif score >= threshold - 10 and ml_prob >= 60:
+        elif score >= threshold - 8 and ml_prob >= 65:
             return True, score, f"score={score}_ml_boost"
 
     return False, score, f"score={score}<{threshold}_or_dir={ml_dir}"

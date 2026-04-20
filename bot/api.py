@@ -3,6 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 import db
 import os
+import json
+import csv
+import io
+from typing import Optional, Any
 
 app = FastAPI(title="CryptoBot API")
 
@@ -14,6 +18,20 @@ app.add_middleware(
 )
 
 BASE = os.path.dirname(__file__)
+
+
+def _snapshot_dict(raw: Any) -> dict:
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {}
+    return {}
+
 
 @app.get("/")
 async def dashboard():
@@ -69,53 +87,88 @@ async def get_positions():
         current = float(r["current_price"]) if r["current_price"] else entry
         size = float(r["amount_usdt"])
         crypto = float(r["amount_crypto"])
-        pnl = (current - entry) * crypto if r["trade_type"] == "long" else (entry - current) * crypto
+        direction = r["trade_type"]
+        pnl = (current - entry) * crypto if direction == "long" else (entry - current) * crypto
+        sl_price = float(r["sl_price"]) if r.get("sl_price") is not None else None
+        snap = _snapshot_dict(r.get("features_snapshot"))
+        market_mode = snap.get("market_mode") or ""
+        sr_signal = snap.get("sr_signal") or ""
+        dist_sl_pct = None
+        if sl_price and sl_price > 0 and current > 0:
+            if direction == "long":
+                dist_sl_pct = round((current - sl_price) / current * 100, 2)
+            else:
+                dist_sl_pct = round((sl_price - current) / current * 100, 2)
         result.append({
             "id": str(r["id"]),
             "symbol": r["symbol"],
-            "direction": r["trade_type"],
+            "direction": direction,
             "entry_price": entry,
             "current_price": current,
             "size": size,
             "pnl": round(pnl, 2),
             "pnl_pct": round(pnl / size * 100, 2),
             "opened_at": r["opened_at"].isoformat(),
+            "sl_price": sl_price,
+            "setup_type": r.get("setup_type") or "",
+            "market_mode": market_mode,
+            "sr_signal": sr_signal,
+            "dist_to_sl_pct": dist_sl_pct,
         })
     return result
 
+_TRADE_SELECT = """
+            SELECT
+                t.id, t.symbol, t.trade_type, t.entry_price, t.exit_price,
+                t.amount_usdt, t.close_reason, t.opened_at, t.closed_at,
+                t.setup_type, t.features_snapshot,
+                COALESCE(t.pnl_usdt, 0) +
+                COALESCE((
+                    SELECT SUM(h.pnl_usdt)
+                    FROM crypto_demo_trades h
+                    WHERE h.symbol = t.symbol
+                    AND h.opened_at = t.opened_at
+                    AND h.close_reason LIKE '%tp1_partial%'
+                    AND h.status = 'closed'
+                    AND h.id != t.id
+                ), 0) as total_pnl
+            FROM crypto_demo_trades t
+            WHERE t.status='closed'
+            AND t.pnl_usdt IS NOT NULL
+            AND t.close_reason NOT LIKE '%tp1_partial%'
+"""
+
 @app.get("/api/trades")
-async def get_trades(limit: int = 50):
-    # Получаем все закрытые сделки включая частичные закрытия
-    rows = await db.fetch("""
-        SELECT
-            t.id, t.symbol, t.trade_type, t.entry_price, t.exit_price,
-            t.amount_usdt, t.close_reason, t.opened_at, t.closed_at,
-            -- Суммируем PnL включая частичные закрытия (tp1_partial)
-            COALESCE(t.pnl_usdt, 0) +
-            COALESCE((
-                SELECT SUM(h.pnl_usdt)
-                FROM crypto_demo_trades h
-                WHERE h.symbol = t.symbol
-                AND h.opened_at = t.opened_at
-                AND h.close_reason LIKE '%tp1_partial%'
-                AND h.status = 'closed'
-                AND h.id != t.id
-            ), 0) as total_pnl
-        FROM crypto_demo_trades t
-        WHERE t.status='closed'
-        AND t.pnl_usdt IS NOT NULL
-        AND t.close_reason NOT LIKE '%tp1_partial%'
-        ORDER BY t.closed_at DESC LIMIT $1
-    """, limit)
+async def get_trades(limit: int = 50, days: Optional[int] = None):
+    if days is not None and days > 0:
+        rows = await db.fetch(
+            _TRADE_SELECT
+            + """
+            AND t.closed_at >= now() - $1::interval
+            ORDER BY t.closed_at DESC LIMIT $2
+            """,
+            f"{int(days)} days",
+            limit,
+        )
+    else:
+        rows = await db.fetch(
+            _TRADE_SELECT + " ORDER BY t.closed_at DESC LIMIT $1",
+            limit,
+        )
 
     result = []
     for r in rows:
         total_pnl = float(r["total_pnl"] or 0)
         size = float(r["amount_usdt"])
         close_reason = r["close_reason"] or ""
-        # Показываем что была частичная фиксация
         if total_pnl > float(r.get("pnl_usdt") or 0) * 1.1:
             close_reason = "tp1_partial+" + close_reason
+        snap = _snapshot_dict(r.get("features_snapshot"))
+        opened = r["opened_at"]
+        closed = r["closed_at"]
+        hold_h = None
+        if opened and closed:
+            hold_h = round((closed - opened).total_seconds() / 3600, 1)
         result.append({
             "id": str(r["id"]),
             "symbol": r["symbol"],
@@ -125,48 +178,231 @@ async def get_trades(limit: int = 50):
             "pnl": round(total_pnl, 2),
             "pnl_pct": round(total_pnl / size * 100, 2),
             "close_reason": close_reason,
-            "opened_at": r["opened_at"].isoformat(),
-            "closed_at": r["closed_at"].isoformat() if r["closed_at"] else None,
+            "opened_at": opened.isoformat() if opened else None,
+            "closed_at": closed.isoformat() if closed else None,
+            "hold_hours": hold_h,
+            "setup_type": r.get("setup_type") or "",
+            "market_mode": snap.get("market_mode") or "",
+            "sr_signal": snap.get("sr_signal") or "",
         })
     return result
 
+@app.get("/api/trades_export.csv")
+async def get_trades_export(days: Optional[int] = None):
+    """CSV экспорт закрытых сделок."""
+    trades = await get_trades(limit=5000, days=days)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([
+        "id", "symbol", "direction", "entry_price", "exit_price", "pnl", "pnl_pct",
+        "setup_type", "market_mode", "sr_signal", "hold_hours", "close_reason",
+        "opened_at", "closed_at",
+    ])
+    for t in trades:
+        w.writerow([
+            t["id"], t["symbol"], t["direction"], t["entry_price"], t.get("exit_price"),
+            t["pnl"], t["pnl_pct"], t.get("setup_type"), t.get("market_mode"),
+            t.get("sr_signal"), t.get("hold_hours"), t["close_reason"],
+            t["opened_at"], t["closed_at"],
+        ])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="crypto_demo_trades.csv"'},
+    )
+
 @app.get("/api/balance_history")
-async def get_balance_history():
-    rows = await db.fetch("""
-        SELECT DATE_TRUNC('hour', closed_at) as hour,
-               SUM(pnl_usdt) as hourly_pnl
-        FROM crypto_demo_trades
-        WHERE status='closed' AND pnl_usdt IS NOT NULL
-        GROUP BY hour ORDER BY hour
-    """)
-    cumulative = 10000000.0
+async def get_balance_history(days: Optional[int] = None):
+    account = await db.fetchrow("SELECT initial_balance FROM crypto_demo_accounts WHERE is_active=true LIMIT 1")
+    initial = float(account["initial_balance"]) if account else 0.0
+
+    if days is not None and days > 0:
+        pnl_before = await db.fetchval(
+            """SELECT COALESCE(SUM(pnl_usdt), 0) FROM crypto_demo_trades
+               WHERE status='closed' AND pnl_usdt IS NOT NULL
+               AND closed_at < now() - $1::interval""",
+            f"{int(days)} days",
+        )
+        start_cum = initial + float(pnl_before or 0)
+        rows = await db.fetch(
+            """SELECT DATE_TRUNC('hour', closed_at) as hour,
+                      SUM(pnl_usdt) as hourly_pnl
+               FROM crypto_demo_trades
+               WHERE status='closed' AND pnl_usdt IS NOT NULL
+               AND closed_at >= now() - $1::interval
+               GROUP BY hour ORDER BY hour""",
+            f"{int(days)} days",
+        )
+    else:
+        start_cum = initial
+        rows = await db.fetch("""
+            SELECT DATE_TRUNC('hour', closed_at) as hour,
+                   SUM(pnl_usdt) as hourly_pnl
+            FROM crypto_demo_trades
+            WHERE status='closed' AND pnl_usdt IS NOT NULL
+            GROUP BY hour ORDER BY hour
+        """)
+
+    cumulative = start_cum
     result = []
     for r in rows:
         cumulative += float(r["hourly_pnl"])
         result.append({"time": r["hour"].isoformat(), "balance": round(cumulative, 2)})
     return result
 
+@app.get("/api/daily_pnl")
+async def get_daily_pnl(days: int = 90):
+    """Суммарный PnL по календарным дням (UTC)."""
+    d = max(1, min(int(days), 365))
+    rows = await db.fetch(
+        """SELECT DATE_TRUNC('day', closed_at AT TIME ZONE 'UTC')::date as day,
+                  SUM(pnl_usdt) as day_pnl
+           FROM crypto_demo_trades
+           WHERE status='closed' AND pnl_usdt IS NOT NULL
+           AND closed_at >= now() - $1::interval
+           GROUP BY 1 ORDER BY 1""",
+        f"{d} days",
+    )
+    return [{"day": r["day"].isoformat(), "pnl": round(float(r["day_pnl"]), 2)} for r in rows]
+
 @app.get("/api/stats")
-async def get_stats():
-    total = await db.fetchval("SELECT COUNT(*) FROM crypto_demo_trades WHERE status='closed'")
+async def get_stats(days: Optional[int] = None):
+    where_extra = ""
+    args: list = []
+    if days is not None and days > 0:
+        where_extra = "AND closed_at >= $1::interval"
+        args.append(f"{int(days)} days")
+
+    total = await db.fetchval(
+        f"SELECT COUNT(*) FROM crypto_demo_trades WHERE status='closed' {where_extra}",
+        *args,
+    )
     if not total:
-        return {"total": 0}
-    wins = await db.fetchval("SELECT COUNT(*) FROM crypto_demo_trades WHERE status='closed' AND pnl_usdt > 0")
-    total_pnl = await db.fetchval("SELECT SUM(pnl_usdt) FROM crypto_demo_trades WHERE status='closed'")
-    avg_win = await db.fetchval("SELECT AVG(pnl_usdt) FROM crypto_demo_trades WHERE status='closed' AND pnl_usdt > 0")
-    avg_loss = await db.fetchval("SELECT AVG(pnl_usdt) FROM crypto_demo_trades WHERE status='closed' AND pnl_usdt < 0")
-    by_reason = await db.fetch("""
+        return {
+            "total": 0,
+            "days": days,
+            "by_reason": [],
+            "by_reason_bucket": [],
+        }
+
+    wins = await db.fetchval(
+        f"SELECT COUNT(*) FROM crypto_demo_trades WHERE status='closed' AND pnl_usdt > 0 {where_extra}",
+        *args,
+    )
+    total_pnl = await db.fetchval(
+        f"SELECT SUM(pnl_usdt) FROM crypto_demo_trades WHERE status='closed' {where_extra}",
+        *args,
+    )
+    sum_wins = await db.fetchval(
+        f"SELECT COALESCE(SUM(pnl_usdt), 0) FROM crypto_demo_trades WHERE status='closed' AND pnl_usdt > 0 {where_extra}",
+        *args,
+    )
+    sum_losses = await db.fetchval(
+        f"SELECT COALESCE(SUM(pnl_usdt), 0) FROM crypto_demo_trades WHERE status='closed' AND pnl_usdt < 0 {where_extra}",
+        *args,
+    )
+    avg_win = await db.fetchval(
+        f"SELECT AVG(pnl_usdt) FROM crypto_demo_trades WHERE status='closed' AND pnl_usdt > 0 {where_extra}",
+        *args,
+    )
+    avg_loss = await db.fetchval(
+        f"SELECT AVG(pnl_usdt) FROM crypto_demo_trades WHERE status='closed' AND pnl_usdt < 0 {where_extra}",
+        *args,
+    )
+
+    loss_sum_abs = abs(float(sum_losses or 0))
+    profit_factor = None
+    if loss_sum_abs > 1e-9:
+        profit_factor = round(float(sum_wins or 0) / loss_sum_abs, 3)
+    elif float(sum_wins or 0) > 0:
+        pass
+
+    expectancy = round(float(total_pnl or 0) / total, 2) if total else 0.0
+
+    account = await db.fetchrow("SELECT initial_balance FROM crypto_demo_accounts WHERE is_active=true LIMIT 1")
+    initial = float(account["initial_balance"]) if account else 0.0
+
+    if args:
+        pnl_before_win = await db.fetchval(
+            """SELECT COALESCE(SUM(pnl_usdt), 0) FROM crypto_demo_trades
+               WHERE status='closed' AND pnl_usdt IS NOT NULL
+               AND closed_at < now() - $1::interval""",
+            args[0],
+        )
+        start_equity = initial + float(pnl_before_win or 0)
+    else:
+        start_equity = initial
+
+    max_drawdown = 0.0
+    dd_rows = await db.fetch(
+        f"""
+        SELECT closed_at, pnl_usdt
+        FROM crypto_demo_trades
+        WHERE status='closed' AND pnl_usdt IS NOT NULL AND closed_at IS NOT NULL
+        {where_extra}
+        ORDER BY closed_at
+        """,
+        *args,
+    )
+    cum = start_equity
+    peak = start_equity
+    for row in dd_rows:
+        cum += float(row["pnl_usdt"] or 0)
+        if cum > peak:
+            peak = cum
+        dd = peak - cum
+        if dd > max_drawdown:
+            max_drawdown = dd
+
+    by_reason = await db.fetch(
+        f"""
         SELECT close_reason, COUNT(*) as cnt, SUM(pnl_usdt) as total_pnl
-        FROM crypto_demo_trades WHERE status='closed'
+        FROM crypto_demo_trades WHERE status='closed' {where_extra}
         GROUP BY close_reason ORDER BY total_pnl DESC
-    """)
+        """,
+        *args,
+    )
+
+    by_bucket = await db.fetch(
+        f"""
+        SELECT
+          CASE
+            WHEN close_reason IS NULL THEN '(null)'
+            WHEN close_reason LIKE 'opposite_forecast%%' THEN 'opposite_forecast*'
+            WHEN close_reason LIKE 'weak_forecast%%' THEN 'weak_forecast*'
+            WHEN close_reason LIKE '%%forecast_decay%%' THEN 'forecast_decay*'
+            ELSE close_reason
+          END AS bucket,
+          COUNT(*) AS cnt,
+          SUM(pnl_usdt) AS total_pnl
+        FROM crypto_demo_trades
+        WHERE status='closed' {where_extra}
+        GROUP BY 1
+        ORDER BY total_pnl ASC
+        """,
+        *args,
+    )
+
     return {
-        "total": total, "wins": wins, "losses": total - wins,
+        "total": total,
+        "wins": wins,
+        "losses": total - wins,
         "win_rate": round(wins / total * 100, 1),
         "total_pnl": round(float(total_pnl or 0), 2),
         "avg_win": round(float(avg_win or 0), 2),
         "avg_loss": round(float(avg_loss or 0), 2),
-        "by_reason": [{"reason": r["close_reason"], "count": r["cnt"], "pnl": round(float(r["total_pnl"]), 2)} for r in by_reason],
+        "profit_factor": profit_factor,
+        "expectancy": expectancy,
+        "max_drawdown": round(max_drawdown, 2),
+        "days": days,
+        "by_reason": [
+            {"reason": r["close_reason"], "count": r["cnt"], "pnl": round(float(r["total_pnl"]), 2)}
+            for r in by_reason
+        ],
+        "by_reason_bucket": [
+            {"reason": r["bucket"], "count": r["cnt"], "pnl": round(float(r["total_pnl"]), 2)}
+            for r in by_bucket
+        ],
     }
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -189,7 +425,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "open_trades": open_trades,
                     "fear_greed": {"value": float(fg["value"]), "label": fg["label"]} if fg else None,
                 })
-            except Exception as e:
+            except Exception:
                 pass
             await asyncio.sleep(2)
     except WebSocketDisconnect:
@@ -251,7 +487,7 @@ async def get_candles(symbol: str = "BTC", interval: str = "60", limit: int = 20
                     for r in reversed(data["result"]["list"])
                 ]
                 return candles
-    except Exception as e:
+    except Exception:
         return []
 
 
@@ -283,7 +519,6 @@ async def get_market_context():
         SELECT features_snapshot FROM crypto_market_global WHERE id='latest'
     """)
     if row and row["features_snapshot"]:
-        import json
         ctx = json.loads(row["features_snapshot"]) if isinstance(row["features_snapshot"], str) else row["features_snapshot"]
         return ctx
     return {}

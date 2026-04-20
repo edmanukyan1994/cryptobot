@@ -242,7 +242,10 @@ body {
 .amount { font-family: var(--mono); font-size: 12px; color: var(--muted2); min-width: 70px; }
 
 /* STATS */
-.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 1rem; }
+.stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 1rem; }
+@media (max-width: 520px) {
+  .stat-grid { grid-template-columns: 1fr 1fr; }
+}
 .stat-card { background: var(--bg1); border-radius: 8px; padding: 0.75rem; border: 1px solid var(--border); }
 .stat-label { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-bottom: 4px; letter-spacing: 0.5px; }
 .stat-val { font-size: 18px; font-weight: 600; }
@@ -406,6 +409,34 @@ body {
 
 /* MINI SPARKLINE */
 .pnl-bar { height: 2px; border-radius: 1px; margin-top: 3px; }
+
+.header-badge {
+  font-size: 10px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--bg3);
+  border: 1px solid var(--border2);
+  font-family: var(--mono);
+  color: var(--muted2);
+}
+.header-badge.kill {
+  color: var(--red);
+  border-color: rgba(255, 71, 87, 0.5);
+  background: rgba(255, 71, 87, 0.08);
+}
+
+.trades-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.trades-table-wrap { overflow-x: auto; }
+.trade-row-wide {
+  display: grid;
+  grid-template-columns: 36px 72px 52px 80px 64px 72px 1fr minmax(100px, 1.2fr) 80px 52px;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+.trade-row-wide .muted-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -437,6 +468,13 @@ body {
     <div style="flex:1"></div>
 
     <div style="padding: 0.5rem; border-top: 1px solid var(--border); margin-top: 0.5rem;">
+      <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:6px">ПЕРИОД</div>
+      <select id="period-filter" class="btn" style="width:100%;cursor:pointer;margin-bottom:8px;font-size:11px" onchange="onPeriodChange()">
+        <option value="">Все время</option>
+        <option value="7">7 дней</option>
+        <option value="30">30 дней</option>
+        <option value="90">90 дней</option>
+      </select>
       <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:6px">ОБНОВЛЕНИЕ</div>
       <div style="font-family:var(--mono);font-size:11px;color:var(--muted2)" id="sidebar-time">—</div>
       <button class="btn" style="width:100%;margin-top:8px;text-align:center" onclick="loadAll()">↻ Обновить</button>
@@ -449,7 +487,11 @@ body {
     <!-- OVERVIEW PAGE -->
     <div class="page active" id="page-overview">
       <div class="page-header">
-        <div class="page-title">Обзор</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <div class="page-title">Обзор</div>
+          <span id="badge-mode" class="header-badge" style="display:none"></span>
+          <span id="badge-kill" class="header-badge kill" style="display:none">KILL SWITCH</span>
+        </div>
         <button class="btn" onclick="loadAll()">↻</button>
       </div>
 
@@ -482,6 +524,16 @@ body {
         </div>
         <div id="balance-chart-container">
           <canvas id="chart" height="200"></canvas>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:1.25rem">
+        <div class="card-header">
+          <span class="card-title">PnL по дням (UTC)</span>
+          <span style="font-family:var(--mono);font-size:10px;color:var(--muted)" id="daily-chart-hint"></span>
+        </div>
+        <div style="height:200px">
+          <canvas id="daily-chart" height="200"></canvas>
         </div>
       </div>
 
@@ -535,10 +587,15 @@ body {
     <div class="page" id="page-trades">
       <div class="page-header">
         <div class="page-title">История сделок</div>
-        <button class="btn" onclick="loadTradesFull()">↻</button>
+        <div class="trades-toolbar">
+          <a id="trades-csv-link" class="btn" href="#" target="_blank" rel="noopener">Экспорт CSV</a>
+          <button class="btn" onclick="loadTradesFull()">↻</button>
+        </div>
       </div>
       <div class="card">
-        <div id="trades-full"><div class="loading">Загрузка</div></div>
+        <div class="trades-table-wrap">
+          <div id="trades-full"><div class="loading">Загрузка</div></div>
+        </div>
       </div>
     </div>
 
@@ -604,11 +661,41 @@ body {
 </div>
 
 <script>
-const API = 'https://cryptobot-production-bad6.up.railway.app';
+const API = (() => {
+  const q = new URLSearchParams(location.search).get('api');
+  if (q) return q.replace(/\/$/, '');
+  if (location.protocol === 'file:' || !location.hostname) return 'https://cryptobot-production-bad6.up.railway.app';
+  return location.origin;
+})();
 let balanceChart = null;
+let dailyPnLChart = null;
 let candleChart = null;
 let currentSymbol = null;
 let currentTf = '60';
+
+function getPeriodDays() {
+  const el = document.getElementById('period-filter');
+  if (!el || el.value === '' || el.value === null) return null;
+  const n = parseInt(el.value, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function onPeriodChange() {
+  updateCsvHref();
+  loadStats();
+  loadChart();
+  loadDailyChart();
+  if (document.getElementById('page-trades') && document.getElementById('page-trades').classList.contains('active')) {
+    loadTradesFull();
+  }
+}
+
+function updateCsvHref() {
+  const a = document.getElementById('trades-csv-link');
+  if (!a) return;
+  const d = getPeriodDays();
+  a.href = d ? `${API}/api/trades_export.csv?days=${d}` : `${API}/api/trades_export.csv`;
+}
 
 // ── UTILS ──
 const fmt = n => new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(n);
@@ -648,6 +735,18 @@ async function loadStatus() {
 
     const now = new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'});
     document.getElementById('sidebar-time').textContent = now;
+
+    const bm = document.getElementById('badge-mode');
+    if (bm && d.strategy_mode) {
+      bm.textContent = String(d.strategy_mode);
+      bm.style.display = 'inline-block';
+    } else if (bm) {
+      bm.style.display = 'none';
+    }
+    const bk = document.getElementById('badge-kill');
+    if (bk) {
+      bk.style.display = d.kill_switch ? 'inline-block' : 'none';
+    }
 
     if (d.fear_greed) {
       const fg = d.fear_greed.value;
@@ -697,17 +796,20 @@ async function loadPositionsFull() {
     }
 
     el.innerHTML = `
-      <div class="signal-row signal-header" style="grid-template-columns:40px 70px 90px 90px 1fr 80px">
-        <span>Тип</span><span>Символ</span><span>Размер</span><span>Вход</span><span>PnL</span><span>%</span>
+      <div class="signal-row signal-header" style="grid-template-columns:36px 64px 68px 68px 52px 48px minmax(80px,1fr) 72px 44px;overflow-x:auto;min-width:720px">
+        <span>Тип</span><span>Симв</span><span>Размер</span><span>Вход</span><span>SL</span><span>ΔSL%</span><span>Сетап / режим</span><span>PnL</span><span>%</span>
       </div>
       ${data.map(t=>`
-        <div class="signal-row" style="grid-template-columns:40px 70px 90px 90px 1fr 80px" onclick="openChart('${t.symbol}')">
-          <span class="badge badge-${t.direction}">${t.direction==='short'?'SHORT':'LONG'}</span>
+        <div class="signal-row" style="grid-template-columns:36px 64px 68px 68px 52px 48px minmax(80px,1fr) 72px 44px;overflow-x:auto;min-width:720px" onclick="openChart('${t.symbol}')">
+          <span class="badge badge-${t.direction}">${t.direction==='short'?'S':'L'}</span>
           <span class="symbol">${t.symbol}</span>
-          <span style="font-family:var(--mono);font-size:11px;color:var(--muted2)">${fmt(t.size)}</span>
-          <span style="font-family:var(--mono);font-size:11px;color:var(--muted2)">${t.entry ? '$'+parseFloat(t.entry).toFixed(4) : '—'}</span>
-          <span class="${t.pnl>=0?'green':'red'}" style="font-family:var(--mono);font-size:12px">${fmtS(t.pnl)}</span>
-          <span class="${t.pnl_pct>=0?'green':'red'}" style="font-family:var(--mono);font-size:11px">${fmtP(t.pnl_pct||0)}</span>
+          <span style="font-family:var(--mono);font-size:10px;color:var(--muted2)">${fmt(t.size)}</span>
+          <span style="font-family:var(--mono);font-size:10px;color:var(--muted2)">${t.entry_price!=null?'$'+parseFloat(t.entry_price).toFixed(4):'—'}</span>
+          <span style="font-family:var(--mono);font-size:9px;color:var(--muted)">${t.sl_price!=null&&t.sl_price>0?'$'+parseFloat(t.sl_price).toFixed(2):'—'}</span>
+          <span style="font-family:var(--mono);font-size:9px;color:${(t.dist_to_sl_pct!=null&&t.dist_to_sl_pct<0.3)?'var(--red)':'var(--muted2)'}">${t.dist_to_sl_pct!=null?t.dist_to_sl_pct+'%':'—'}</span>
+          <span style="font-size:9px;color:var(--muted2);line-height:1.2">${(t.setup_type||'—').slice(0,14)}<br/><span style="opacity:0.8">${(t.market_mode||'').slice(0,12)}</span></span>
+          <span class="${t.pnl>=0?'green':'red'}" style="font-family:var(--mono);font-size:10px">${fmtS(t.pnl)}</span>
+          <span class="${t.pnl_pct>=0?'green':'red'}" style="font-family:var(--mono);font-size:10px">${fmtP(t.pnl_pct||0)}</span>
         </div>`).join('')}`;
   } catch(e) {}
 }
@@ -715,7 +817,9 @@ async function loadPositionsFull() {
 // ── STATS ──
 async function loadStats() {
   try {
-    const d = await fetch(API+'/api/stats').then(r=>r.json());
+    const pd = getPeriodDays();
+    const q = pd != null ? `?days=${pd}` : '';
+    const d = await fetch(API+'/api/stats'+q).then(r=>r.json());
     const el = document.getElementById('stats-panel');
 
     if (!d.total) {
@@ -723,7 +827,12 @@ async function loadStats() {
       return;
     }
 
+    const pf = d.profit_factor != null && d.profit_factor !== undefined
+      ? d.profit_factor : '—';
+    const periodLabel = pd != null ? `${pd} дн.` : 'все';
+
     el.innerHTML = `
+      <div style="font-size:10px;color:var(--muted);margin-bottom:8px;font-family:var(--mono)">Период: ${periodLabel}</div>
       <div class="stat-grid">
         <div class="stat-card">
           <div class="stat-label">WIN RATE</div>
@@ -734,17 +843,38 @@ async function loadStats() {
           <div class="stat-val">${d.total}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">СР. ПРИБЫЛЬ</div>
-          <div class="stat-val green" style="font-size:14px">${fmtS(d.avg_win)}</div>
+          <div class="stat-label">EXPECTANCY</div>
+          <div class="stat-val ${d.expectancy>=0?'green':'red'}" style="font-size:14px">${fmtS(d.expectancy||0)}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">СР. УБЫТОК</div>
-          <div class="stat-val red" style="font-size:14px">${fmtS(d.avg_loss)}</div>
+          <div class="stat-label">PROFIT FACTOR</div>
+          <div class="stat-val" style="font-size:14px">${pf}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">MAX DD</div>
+          <div class="stat-val red" style="font-size:13px">${fmt(d.max_drawdown||0)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Σ PnL</div>
+          <div class="stat-val ${(d.total_pnl||0)>=0?'green':'red'}" style="font-size:14px">${fmtS(d.total_pnl||0)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">СР. WIN</div>
+          <div class="stat-val green" style="font-size:13px">${fmtS(d.avg_win)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">СР. LOSS</div>
+          <div class="stat-val red" style="font-size:13px">${fmtS(d.avg_loss)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">W / L</div>
+          <div class="stat-val" style="font-size:13px">${d.wins} / ${d.losses}</div>
         </div>
       </div>
-      ${(d.by_reason||[]).slice(0,5).map(r=>`
+      <div style="font-size:10px;color:var(--muted);margin:10px 0 6px;text-transform:uppercase;letter-spacing:0.5px">Причины (группы)</div>
+      ${(d.by_reason_bucket||[]).slice(0,14).map(r=>`
         <div class="trade-row">
-          <span class="muted-text">${r.reason||'?'}</span>
+          <span class="muted-text" style="overflow:hidden;text-overflow:ellipsis">${r.reason||'?'}</span>
           <span style="font-family:var(--mono);font-size:10px;color:var(--muted)">${r.count}×</span>
           <span style="font-family:var(--mono);font-size:12px;margin-left:8px" class="${r.pnl>=0?'green':'red'}">${fmtS(r.pnl)}</span>
         </div>`).join('')}`;
@@ -754,7 +884,9 @@ async function loadStats() {
 // ── BALANCE CHART ──
 async function loadChart() {
   try {
-    const data = await fetch(API+'/api/balance_history').then(r=>r.json());
+    const pd = getPeriodDays();
+    const q = pd != null ? `?days=${pd}` : '';
+    const data = await fetch(API+'/api/balance_history'+q).then(r=>r.json());
     if (!data.length) return;
 
     const ctx = document.getElementById('chart').getContext('2d');
@@ -802,6 +934,59 @@ async function loadChart() {
   } catch(e) {}
 }
 
+// ── DAILY PnL CHART ──
+async function loadDailyChart() {
+  try {
+    const pd = getPeriodDays() || 90;
+    const data = await fetch(`${API}/api/daily_pnl?days=${pd}`).then(r=>r.json());
+    const ctx = document.getElementById('daily-chart');
+    if (!ctx) return;
+    if (!data.length) {
+      if (dailyPnLChart) { dailyPnLChart.destroy(); dailyPnLChart = null; }
+      const h = document.getElementById('daily-chart-hint');
+      if (h) h.textContent = 'Нет данных';
+      return;
+    }
+    const c2d = ctx.getContext('2d');
+    if (dailyPnLChart) dailyPnLChart.destroy();
+
+    const sum = data.reduce((a,b)=>a+(b.pnl||0),0);
+    document.getElementById('daily-chart-hint').textContent =
+      `${data.length} дн. · Σ ${sum>=0?'+':''}${fmt(sum)}`;
+
+    dailyPnLChart = new Chart(c2d, {
+      type: 'bar',
+      data: {
+        labels: data.map(d => d.day.slice(5)),
+        datasets: [{
+          data: data.map(d => d.pnl),
+          backgroundColor: data.map(d => (d.pnl>=0 ? 'rgba(0,214,143,0.45)' : 'rgba(255,71,87,0.45)')),
+          borderWidth: 0,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: { label: c => fmt(c.raw) },
+            backgroundColor: '#1a1a1a',
+            borderColor: '#2a2a2a',
+            borderWidth: 1,
+          }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { maxRotation: 45, font: { size: 9, family: 'JetBrains Mono' }, color: '#555' } },
+          y: { grid: { color: 'rgba(255,255,255,0.03)' }, ticks: { font: { size: 10, family: 'JetBrains Mono' }, color: '#555',
+            callback: v => (Math.abs(v)>=1e6 ? (v/1e6).toFixed(1)+'M' : (Math.abs(v)>=1e3 ? (v/1e3).toFixed(0)+'k' : v))
+          } }
+        }
+      }
+    });
+  } catch(e) {}
+}
+
 // ── TRADES ──
 async function loadTrades() {
   // Overview only shows last 5 in stats section, full list on trades page
@@ -809,19 +994,30 @@ async function loadTrades() {
 
 async function loadTradesFull() {
   try {
-    const data = await fetch(API+'/api/trades?limit=50').then(r=>r.json());
+    const pd = getPeriodDays();
+    const q = new URLSearchParams({ limit: '80' });
+    if (pd != null) q.set('days', String(pd));
+    const data = await fetch(API+'/api/trades?'+q.toString()).then(r=>r.json());
     const el = document.getElementById('trades-full');
 
     if (!data.length) { el.innerHTML = '<div class="loading">Нет сделок</div>'; return; }
 
-    el.innerHTML = data.map(t=>`
-      <div class="trade-row" onclick="openChart('${t.symbol}')">
+    el.innerHTML = `
+      <div class="trade-row-wide signal-header" style="font-size:10px;color:var(--muted);text-transform:uppercase">
+        <span></span><span>Симв</span><span>Тип</span><span>Сетап</span><span>Режим</span><span>Часы</span><span>SR</span><span>Причина</span><span>PnL</span><span>%</span>
+      </div>
+      ${data.map(t=>`
+      <div class="trade-row-wide" onclick="openChart('${t.symbol}')">
         <span class="badge badge-${t.direction}">${t.direction==='short'?'S':'L'}</span>
         <span class="symbol">${t.symbol}</span>
-        <span class="muted-text">${t.close_reason||'?'}</span>
-        <span class="${t.pnl>=0?'green':'red'}" style="font-family:var(--mono);font-size:12px;white-space:nowrap">${fmtS(t.pnl)}</span>
-        <span style="font-family:var(--mono);font-size:11px;color:var(--muted);min-width:46px;text-align:right">${fmtP(t.pnl_pct||0)}</span>
-      </div>`).join('');
+        <span style="font-size:10px;color:var(--muted2)">${(t.setup_type||'—').slice(0,10)}</span>
+        <span style="font-size:10px">${(t.market_mode||'—').slice(0,12)}</span>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--muted)">${t.hold_hours!=null?t.hold_hours:'—'}</span>
+        <span style="font-size:9px;color:var(--muted2)">${(t.sr_signal||'—').slice(0,8)}</span>
+        <span class="muted-text" title="${(t.close_reason||'').replace(/"/g,'')}">${(t.close_reason||'?').slice(0,22)}</span>
+        <span class="${t.pnl>=0?'green':'red'}" style="font-family:var(--mono);font-size:11px;white-space:nowrap">${fmtS(t.pnl)}</span>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--muted);text-align:right">${fmtP(t.pnl_pct||0)}</span>
+      </div>`).join('')}`;
   } catch(e) {}
 }
 
@@ -1059,7 +1255,8 @@ async function loadCandles(interval) {
 
 // ── LOAD ALL ──
 async function loadAll() {
-  await Promise.all([loadStatus(), loadPositions(), loadStats(), loadChart()]);
+  updateCsvHref();
+  await Promise.all([loadStatus(), loadPositions(), loadStats(), loadChart(), loadDailyChart()]);
 }
 
 // ── INIT ──
@@ -1067,6 +1264,7 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(()=>{});
 }
 
+updateCsvHref();
 loadAll();
 setInterval(loadAll, 30000);
 setInterval(() => {

@@ -505,8 +505,8 @@ async def check_entry(
     if not scoring_should:
         return False, "", f"scoring_reject({scoring_reason})"
 
-    # В боковике — только от S/R уровней
-    if market_mode == "bear_sideways":
+    # В боковике — только от S/R уровней (и для нейтрального sideways, см. ARCHITECTURE)
+    if market_mode in ("bear_sideways", "sideways"):
         if direction == "short" and sr_signal != "bounce_resistance":
             return False, "", f"sideways_needs_resistance(sr={sr_signal})"
         if direction == "long" and sr_signal not in ("bounce_support", "breakout_up"):

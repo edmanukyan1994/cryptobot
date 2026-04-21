@@ -470,24 +470,14 @@ async def check_entry(
     if not forecast:
         return False, "", "no_data"
 
-    try:
-        prob = float(forecast.get("direction_probability") or 0)
-    except Exception:
-        prob = 0.0
-
     # Направление определяем из совокупности сигналов
     direction, dir_reason = detect_direction(features, forecast)
     if not direction:
         return False, "", f"no_direction({dir_reason})"
 
-    st = normalize_setup_type(setup_type)
     volume = float(features.get("volume_24h") or 0)
     volume_bucket = str(features.get("volume_bucket") or volume_to_bucket(volume))
     volatility_bucket = str(features.get("volatility_bucket") or "unknown")
-    rsi_raw = features.get("rsi_14")
-    rs_raw = features.get("relative_strength")
-    rsi = float(rsi_raw) if rsi_raw is not None else None
-    rs = float(rs_raw) if rs_raw is not None else None
 
     # Минимальные фильтры (безопасность)
 
@@ -538,23 +528,8 @@ async def check_entry(
         if direction == "long" and sr_signal not in ("bounce_support", "breakout_up"):
             return False, "", f"bull_sideways_needs_support(sr={sr_signal})"
 
-    # Дополнительный контроль качества входа:
-    # normal-сетап часто давал отрицательное ожидание, поэтому требуем более сильное подтверждение
-    if st == "normal":
-        if prob < 55:
-            return False, "", f"normal_needs_prob({prob:.1f}<55)"
-        if scoring_score < 44:
-            return False, "", f"normal_needs_score({scoring_score}<44)"
-
-    # Для слабых шорт-сетапов отсекаем входы против импульса/силы
-    # (сохраняем поток сделок, но режем самые токсичные комбинации)
-    if direction == "short" and st in ("normal", "short_trend"):
-        if rsi is not None and rsi < 35:
-            return False, "", f"short_rsi_too_low({rsi:.1f}<35)"
-        if rs is not None and rs > 1.20:
-            return False, "", f"short_rs_too_strong({rs:.2f}>1.20)"
-        if prob < 54:
-            return False, "", f"short_needs_prob({prob:.1f}<54)"
+    # Доп. фильтры по prob/score/SR убраны: после прохождения скоринга они почти всегда
+    # дублировали жёсткий SR-гейт в trading_cycle и обнуляли поток сделок.
 
 
     # В сильном тренде — только импульсный вход
@@ -566,9 +541,9 @@ async def check_entry(
     return True, direction, f"scoring({scoring_score}):{scoring_reason}"
 
 
-async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool, str]:
+async def can_reenter(symbol: str, direction: str, forecast: dict, forecast_max_age_min: float = 45.0) -> tuple[bool, str]:
     fc_age = (datetime.now(timezone.utc) - forecast["created_at"].replace(tzinfo=timezone.utc)).total_seconds() / 60
-    if fc_age > 30:
+    if fc_age > forecast_max_age_min:
         return False, f"stale_forecast({fc_age:.0f}min)"
 
     prob = float(forecast.get("direction_probability") or 50)
@@ -1177,7 +1152,8 @@ async def trading_cycle():
                        if not callable(v)}
 
             age = (datetime.now(timezone.utc) - features["ts"].replace(tzinfo=timezone.utc)).total_seconds() / 60
-            if age > 30:
+            feat_max_age = float(params.get("features_max_age_minutes") or 60)
+            if age > feat_max_age:
                 continue
 
             forecast = await get_latest_forecast(symbol, "4h")
@@ -1229,7 +1205,7 @@ async def trading_cycle():
                 logger.info(f"BLOCKED {symbol}: FG short_only")
                 continue
 
-            can_open, reentry_reason = await can_reenter(symbol, direction, forecast)
+            can_open, reentry_reason = await can_reenter(symbol, direction, forecast, fc_max_age)
             if not can_open:
                 logger.info(f"BLOCKED {symbol}: {reentry_reason}")
                 continue
@@ -1274,8 +1250,10 @@ async def trading_cycle():
 
             sr_ok, sr_sl_price, sr_reason = get_sr_entry_signal(sr_data, direction)
             if sr_data and not sr_ok:
-                logger.info(f"SR blocked {symbol} {direction}: {sr_reason}")
-                continue
+                # S/R как подсказка к стопу, а не жёсткий вето: иначе при neutral/слабом
+                # сигнале сделки месяцами не открываются.
+                logger.info(f"SR soft-pass {symbol} {direction}: {sr_reason} (using default SL)")
+                sr_sl_price = None
 
             logger.info(f"SETUP {symbol}: mode={market_mode} setup={setup_type} reason={reason}")
 

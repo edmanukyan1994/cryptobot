@@ -609,19 +609,57 @@ async def score_pending_forecasts(batch_size: int = FORECAST_SCORE_BATCH) -> int
             if not h:
                 continue
 
+            target_ts = row["created_at"]
+            interval = f"{h} hours"
             actual = await db.fetchrow(
                 """
-                SELECT price
+                SELECT price, ts
                 FROM crypto_prices_bybit
                 WHERE symbol=$1 AND ts >= $2 + $3::interval
                 ORDER BY ts ASC
                 LIMIT 1
                 """,
                 row["symbol"],
-                row["created_at"],
-                f"{h} hours",
+                target_ts,
+                interval,
             )
+            # Нет тика ровно после горизонта (пропуск коллектора / дырка в истории)
             if not actual or actual["price"] is None:
+                actual = await db.fetchrow(
+                    """
+                    SELECT price, ts
+                    FROM crypto_prices_bybit
+                    WHERE symbol=$1 AND ts >= $2
+                    ORDER BY ts DESC
+                    LIMIT 1
+                    """,
+                    row["symbol"],
+                    target_ts,
+                )
+            if not actual or actual["price"] is None:
+                actual = await db.fetchrow(
+                    """
+                    SELECT price, ts
+                    FROM crypto_prices_bybit
+                    WHERE symbol=$1
+                    ORDER BY ts DESC
+                    LIMIT 1
+                    """,
+                    row["symbol"],
+                )
+
+            if not actual or actual["price"] is None:
+                await db.execute(
+                    """
+                    INSERT INTO crypto_forecast_scores
+                    (forecast_id, symbol, horizon, direction_hit, band_hit, actual_price, scored_at)
+                    VALUES ($1, $2, $3, NULL, NULL, NULL, now())
+                    """,
+                    row["id"],
+                    row["symbol"],
+                    horizon,
+                )
+                scored += 1
                 continue
 
             actual_price = float(actual["price"])

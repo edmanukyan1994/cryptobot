@@ -5,7 +5,7 @@ import asyncio
 import math
 import logging
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from config import FORECAST_INTERVAL
 import db
@@ -610,19 +610,24 @@ async def score_pending_forecasts(batch_size: int = FORECAST_SCORE_BATCH) -> int
                 continue
 
             target_ts = row["created_at"]
-            interval = f"{h} hours"
-            actual = await db.fetchrow(
-                """
-                SELECT price, ts
-                FROM crypto_prices_bybit
-                WHERE symbol=$1 AND ts >= $2 + $3::interval
-                ORDER BY ts ASC
-                LIMIT 1
-                """,
-                row["symbol"],
-                target_ts,
-                interval,
-            )
+            if target_ts is not None and getattr(target_ts, "tzinfo", None) is None:
+                target_ts = target_ts.replace(tzinfo=timezone.utc)
+            # Границу горизона считаем в Python: в PG выражение ts >= $2 + $3::interval
+            # при некоторых биндингах asyncpg давало timestamptz >= interval.
+            deadline = target_ts + timedelta(hours=h) if target_ts else None
+            actual = None
+            if deadline is not None:
+                actual = await db.fetchrow(
+                    """
+                    SELECT price, ts
+                    FROM crypto_prices_bybit
+                    WHERE symbol=$1 AND ts >= $2
+                    ORDER BY ts ASC
+                    LIMIT 1
+                    """,
+                    row["symbol"],
+                    deadline,
+                )
             # Нет тика ровно после горизонта (пропуск коллектора / дырка в истории)
             if not actual or actual["price"] is None:
                 actual = await db.fetchrow(

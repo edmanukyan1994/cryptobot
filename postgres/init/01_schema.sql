@@ -92,6 +92,18 @@ CREATE TABLE IF NOT EXISTS crypto_prices_bybit (
   mark_price numeric,
   volume_24h numeric,
   price_change_24h numeric,
+  turnover_24h numeric,
+  high_price_24h numeric,
+  low_price_24h numeric,
+  prev_price_24h numeric,
+  prev_price_1h numeric,
+  open_interest numeric,
+  open_interest_value numeric,
+  funding_rate numeric,
+  bid1_price numeric,
+  bid1_size numeric,
+  ask1_price numeric,
+  ask1_size numeric,
   ts timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_prices_bybit_symbol_ts ON crypto_prices_bybit(symbol, ts DESC);

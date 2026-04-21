@@ -535,7 +535,8 @@ async def check_entry(
     # В сильном тренде — только импульсный вход
     if market_mode == "bear" and direction == "short" and r_1h > -0.3:
         return False, "", f"bear_needs_impulse(r_1h={r_1h:.3f})"
-    if market_mode == "bull" and direction == "long" and r_1h < 0.3:
+    # Раньше 0.3% за час — почти никогда; 0.05% — минимальный «не валится» импульс за час.
+    if market_mode == "bull" and direction == "long" and r_1h < 0.05:
         return False, "", f"bull_needs_impulse(r_1h={r_1h:.3f})"
 
     return True, direction, f"scoring({scoring_score}):{scoring_reason}"

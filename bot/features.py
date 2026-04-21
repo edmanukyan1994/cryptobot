@@ -531,10 +531,21 @@ async def build_features(session, symbol: str):
     prices = [float(r["price"]) for r in reversed(price_rows)]
     current = prices[-1]
 
-    latest = await db.fetchrow(
-        "SELECT volume_24h, price_change_24h FROM crypto_prices_bybit WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
-        symbol
-    )
+    try:
+        latest = await db.fetchrow(
+            """
+            SELECT volume_24h, price_change_24h,
+                   COALESCE(turnover_24h, 0)::double precision AS turnover_24h
+            FROM crypto_prices_bybit
+            WHERE symbol=$1 ORDER BY ts DESC LIMIT 1
+            """,
+            symbol,
+        )
+    except Exception:
+        latest = await db.fetchrow(
+            "SELECT volume_24h, price_change_24h FROM crypto_prices_bybit WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
+            symbol,
+        )
     if not latest:
         return None
 
@@ -636,7 +647,15 @@ async def build_features(session, symbol: str):
         candle_score_long = 0
         candle_score_short = 0
 
-    volume_24h = float(latest["volume_24h"] or 0)
+    # Bybit volume24h — в базовой монете/контрактах; пороги classify_volume_bucket и trader — в USDT.
+    base_vol = float(latest["volume_24h"] or 0)
+    turnover = float(latest.get("turnover_24h") or 0)
+    if turnover > 0:
+        volume_24h = turnover
+    elif current > 0 and base_vol > 0:
+        volume_24h = base_vol * current
+    else:
+        volume_24h = base_vol
     volume_bucket = classify_volume_bucket(volume_24h)
     volatility_bucket = classify_volatility_bucket(atr_pct)
     relative_strength = calc_relative_strength(r_24h, btc_24h_change)

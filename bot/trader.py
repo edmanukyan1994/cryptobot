@@ -459,6 +459,46 @@ def detect_direction(features: dict, forecast: dict) -> tuple[str, str]:
         return "", f"no_edge(bull={bull_score},bear={bear_score})"
 
 
+async def liquidity_usdt_live(symbol: str) -> float | None:
+    """Актуальный оборот 24h в USDT из последнего тика (не из устаревшей строки features)."""
+    if not symbol:
+        return None
+    try:
+        row = await db.fetchrow(
+            """
+            SELECT COALESCE(turnover_24h, 0)::double precision AS t,
+                   COALESCE(volume_24h, 0)::double precision AS v,
+                   COALESCE(price, 0)::double precision AS p
+            FROM crypto_prices_bybit
+            WHERE symbol = $1
+            ORDER BY ts DESC
+            LIMIT 1
+            """,
+            symbol,
+        )
+    except Exception:
+        row = await db.fetchrow(
+            """
+            SELECT 0::double precision AS t,
+                   COALESCE(volume_24h, 0)::double precision AS v,
+                   COALESCE(price, 0)::double precision AS p
+            FROM crypto_prices_bybit
+            WHERE symbol = $1
+            ORDER BY ts DESC
+            LIMIT 1
+            """,
+            symbol,
+        )
+    if not row:
+        return None
+    t, v, p = float(row["t"] or 0), float(row["v"] or 0), float(row["p"] or 0)
+    if t > 0:
+        return t
+    if v > 0 and p > 0:
+        return v * p
+    return v if v > 0 else None
+
+
 async def check_entry(
     features: dict,
     forecast: dict,
@@ -475,8 +515,13 @@ async def check_entry(
     if not direction:
         return False, "", f"no_direction({dir_reason})"
 
-    volume = float(features.get("volume_24h") or 0)
-    volume_bucket = str(features.get("volume_bucket") or volume_to_bucket(volume))
+    sym = str(features.get("symbol") or "").strip()
+    vol_feat = float(features.get("volume_24h") or 0)
+    live_liq = await liquidity_usdt_live(sym)
+    volume = max(vol_feat, live_liq or 0.0)
+    features["volume_24h"] = volume
+    features["volume_bucket"] = volume_to_bucket(volume)
+    volume_bucket = str(features["volume_bucket"])
     volatility_bucket = str(features.get("volatility_bucket") or "unknown")
 
     # Минимальные фильтры (безопасность)
@@ -535,9 +580,10 @@ async def check_entry(
     # В сильном тренде — только импульсный вход
     if market_mode == "bear" and direction == "short" and r_1h > -0.3:
         return False, "", f"bear_needs_impulse(r_1h={r_1h:.3f})"
-    # Раньше 0.3% за час — почти никогда; 0.05% — минимальный «не валится» импульс за час.
-    if market_mode == "bull" and direction == "long" and r_1h < 0.05:
-        return False, "", f"bull_needs_impulse(r_1h={r_1h:.3f})"
+    # В bull выше: не лонговать сильно разогнанную свечу (r_1h>0.05). Ниже не требовать
+    # «положительный импульс» — иначе вместе с порогом выше отсекается всё кроме r_1h≈0.05.
+    if market_mode == "bull" and direction == "long" and r_1h < -0.12:
+        return False, "", f"bull_avoid_dump(r_1h={r_1h:.3f})"
 
     return True, direction, f"scoring({scoring_score}):{scoring_reason}"
 

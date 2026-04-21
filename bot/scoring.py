@@ -19,6 +19,29 @@ logger = logging.getLogger("scoring")
 _weights_cache = None
 _weights_cache_time = None
 
+DEFAULT_WEIGHTS = {
+    "sr_signal": 0.30,
+    "candle_confirmation": 0.25,
+    "fvg_fibonacci": 0.15,
+    "rsi": 0.12,
+    "relative_strength": 0.10,
+    "momentum_1h": 0.05,
+    "volume": 0.03,
+    "ml_signal": 0.00,
+}
+
+
+def _normalize_weights(raw: dict | None) -> dict:
+    """Fill missing factors and sanitize invalid weight values."""
+    merged = dict(DEFAULT_WEIGHTS)
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            try:
+                merged[k] = float(v)
+            except Exception:
+                continue
+    return merged
+
 
 async def get_weights() -> dict:
     global _weights_cache, _weights_cache_time
@@ -33,10 +56,15 @@ async def get_weights() -> dict:
             raw_weights = row["weights"]
             if isinstance(raw_weights, str):
                 raw_weights = _json.loads(raw_weights)
-            weights_float = {k: float(v) for k, v in raw_weights.items()}
+            weights_float = _normalize_weights(raw_weights)
+            try:
+                threshold = int(row["entry_threshold"])
+            except Exception:
+                threshold = 45
+            threshold = max(20, min(85, threshold))
             _weights_cache = {
                 "weights": weights_float,
-                "entry_threshold": int(row["entry_threshold"]),
+                "entry_threshold": threshold,
             }
             _weights_cache_time = now
             return _weights_cache
@@ -45,16 +73,7 @@ async def get_weights() -> dict:
 
     # Fallback — новые веса
     return {
-        "weights": {
-            "sr_signal":           0.30,
-            "candle_confirmation": 0.25,
-            "fvg_fibonacci":       0.15,
-            "rsi":                 0.12,
-            "relative_strength":   0.10,
-            "momentum_1h":         0.05,
-            "volume":              0.03,
-            "ml_signal":           0.00,
-        },
+        "weights": dict(DEFAULT_WEIGHTS),
         "entry_threshold": 45,
     }
 
@@ -270,11 +289,14 @@ async def calculate_score(features: dict, direction: str, market_mode: str, ml_f
     return final_score
 
 
-async def should_enter_long(features: dict, forecast: dict, market_mode: str) -> tuple:
-    from ml_client import get_ml_prediction
-    ml_prediction = await get_ml_prediction(features)
+async def should_enter_long(features: dict, forecast: dict, market_mode: str, ml_prediction: dict = None) -> tuple:
+    if ml_prediction is None:
+        from ml_client import get_ml_prediction
+        ml_prediction = await get_ml_prediction(features)
     score = await calculate_score(features, "long", market_mode, ml_forecast=ml_prediction)
     threshold = await get_entry_threshold()
+    weights = await get_weights()
+    ml_weight = float(weights.get("weights", {}).get("ml_signal", 0.0))
 
     rsi = float(features.get("rsi_14")) if features.get("rsi_14") is not None else None
     dist = float(features.get("distance_to_support_pct")) if features.get("distance_to_support_pct") is not None else None
@@ -288,6 +310,12 @@ async def should_enter_long(features: dict, forecast: dict, market_mode: str) ->
     ml_dir = (ml_prediction or {}).get("direction")
     ml_prob = float((ml_prediction or {}).get("direction_probability") or 0)
 
+    # Если ML-вес отключён, не блокируем вход направлением ML.
+    if ml_weight <= 0:
+        if score >= threshold:
+            return True, score, f"score={score}_th={threshold}_ml_off"
+        return False, score, f"score={score}<{threshold}_ml_off"
+
     if ml_dir in ("up", "neutral", None):
         if score >= threshold:
             return True, score, f"score={score}_ml={ml_dir}({ml_prob:.0f})"
@@ -297,11 +325,14 @@ async def should_enter_long(features: dict, forecast: dict, market_mode: str) ->
     return False, score, f"score={score}<{threshold}_or_dir={ml_dir}"
 
 
-async def should_enter_short(features: dict, forecast: dict, market_mode: str) -> tuple:
-    from ml_client import get_ml_prediction
-    ml_prediction = await get_ml_prediction(features)
+async def should_enter_short(features: dict, forecast: dict, market_mode: str, ml_prediction: dict = None) -> tuple:
+    if ml_prediction is None:
+        from ml_client import get_ml_prediction
+        ml_prediction = await get_ml_prediction(features)
     score = await calculate_score(features, "short", market_mode, ml_forecast=ml_prediction)
     threshold = await get_entry_threshold()
+    weights = await get_weights()
+    ml_weight = float(weights.get("weights", {}).get("ml_signal", 0.0))
 
     rsi = float(features.get("rsi_14")) if features.get("rsi_14") is not None else None
     dist = float(features.get("distance_to_resistance_pct")) if features.get("distance_to_resistance_pct") is not None else None
@@ -315,6 +346,12 @@ async def should_enter_short(features: dict, forecast: dict, market_mode: str) -
     ml_dir = (ml_prediction or {}).get("direction")
     ml_prob = float((ml_prediction or {}).get("direction_probability") or 0)
 
+    # Если ML-вес отключён, не блокируем вход направлением ML.
+    if ml_weight <= 0:
+        if score >= threshold:
+            return True, score, f"score={score}_th={threshold}_ml_off"
+        return False, score, f"score={score}<{threshold}_ml_off"
+
     if ml_dir in ("down", "neutral", None):
         if score >= threshold:
             return True, score, f"score={score}_ml={ml_dir}({ml_prob:.0f})"
@@ -324,9 +361,9 @@ async def should_enter_short(features: dict, forecast: dict, market_mode: str) -
     return False, score, f"score={score}<{threshold}_or_dir={ml_dir}"
 
 
-async def should_enter(features: dict, forecast: dict, market_mode: str, direction: str) -> tuple:
+async def should_enter(features: dict, forecast: dict, market_mode: str, direction: str, ml_prediction: dict = None) -> tuple:
     if direction == "long":
-        return await should_enter_long(features, forecast, market_mode)
+        return await should_enter_long(features, forecast, market_mode, ml_prediction=ml_prediction)
     elif direction == "short":
-        return await should_enter_short(features, forecast, market_mode)
+        return await should_enter_short(features, forecast, market_mode, ml_prediction=ml_prediction)
     return False, 0, f"invalid_direction={direction}"

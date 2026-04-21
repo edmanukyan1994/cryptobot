@@ -135,3 +135,41 @@ SELECT
   ROUND(SUM(amount_usdt)::numeric, 0) AS exposure_usdt
 FROM crypto_demo_trades
 WHERE status = 'open';
+
+-- 8) Причина входа (entry_reason в features_snapshot)
+WITH base AS (
+  SELECT *
+  FROM crypto_demo_trades
+  WHERE status = 'closed'
+)
+SELECT
+  '8_by_entry_reason' AS section,
+  COALESCE(NULLIF(features_snapshot->>'entry_reason', ''), '(null)') AS entry_reason,
+  COUNT(*) AS n,
+  ROUND(SUM(pnl_usdt)::numeric, 0) AS sum_pnl,
+  ROUND(AVG(pnl_usdt)::numeric, 0) AS avg_pnl
+FROM base
+GROUP BY COALESCE(NULLIF(features_snapshot->>'entry_reason', ''), '(null)')
+ORDER BY sum_pnl ASC
+LIMIT 30;
+
+-- 9) Тип сетапа + причина входа (для новых сделок)
+WITH base AS (
+  SELECT *
+  FROM crypto_demo_trades
+  WHERE status = 'closed'
+)
+SELECT
+  '9_setup_entry_reason' AS section,
+  COALESCE(setup_type, '(null)') AS setup_type,
+  COALESCE(NULLIF(features_snapshot->>'entry_reason', ''), '(null)') AS entry_reason,
+  COUNT(*) AS n,
+  ROUND(SUM(pnl_usdt)::numeric, 0) AS sum_pnl,
+  ROUND(AVG(pnl_usdt)::numeric, 0) AS avg_pnl
+FROM base
+GROUP BY
+  COALESCE(setup_type, '(null)'),
+  COALESCE(NULLIF(features_snapshot->>'entry_reason', ''), '(null)')
+HAVING COUNT(*) >= 5
+ORDER BY sum_pnl ASC
+LIMIT 40;

@@ -506,8 +506,15 @@ async def check_entry(
     r_1h = float(features.get("r_1h") or 0)
 
     # Основное решение через скоринг
+    ml_prediction = None
+    try:
+        from ml_client import get_ml_prediction
+        ml_prediction = await get_ml_prediction(features)
+    except Exception:
+        ml_prediction = None
+
     scoring_should, scoring_score, scoring_reason = await scoring.should_enter(
-        features, forecast, market_mode, direction
+        features, forecast, market_mode, direction, ml_prediction=ml_prediction
     )
     if not scoring_should:
         return False, "", f"scoring_reject({scoring_reason})"
@@ -559,7 +566,7 @@ async def check_entry(
     if market_mode == "bull" and direction == "long" and r_1h < 0.3:
         return False, "", f"bull_needs_impulse(r_1h={r_1h:.3f})"
 
-    return True, direction, f"scoring({scoring_score})"
+    return True, direction, f"scoring({scoring_score}):{scoring_reason}"
 
 
 async def can_reenter(symbol: str, direction: str, forecast: dict) -> tuple[bool, str]:
@@ -689,6 +696,7 @@ async def open_trade(
     features,
     sr_data=None,
     setup_type="normal",
+    entry_reason="",
     sl_price_override=None,
     market_mode="sideways",
 ):
@@ -770,6 +778,7 @@ async def open_trade(
         "resistance_1": features.get("resistance_1"),
         "distance_to_support_pct": features.get("distance_to_support_pct"),
         "distance_to_resistance_pct": features.get("distance_to_resistance_pct"),
+        "entry_reason": str(entry_reason or ""),
     }
 
     row = await db.fetchrow(
@@ -1283,6 +1292,7 @@ async def trading_cycle():
                 features,
                 sr_data,
                 setup_type,
+                reason,
                 sr_sl_price,
                 market_mode=market_mode,
             )

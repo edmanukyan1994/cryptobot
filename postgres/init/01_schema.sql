@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS crypto_demo_trades (
   amount_usdt numeric NOT NULL,
   amount_crypto numeric NOT NULL,
   entry_price numeric NOT NULL,
+  sl_price numeric,
   exit_price numeric,
   pnl_usdt numeric,
   status text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
@@ -31,6 +32,8 @@ CREATE TABLE IF NOT EXISTS crypto_demo_trades (
   forecast_id uuid,
   forecast_direction text,
   forecast_probability numeric,
+  features_snapshot jsonb DEFAULT '{}',
+  setup_type text DEFAULT 'normal',
   mirrored_to_bybit boolean NOT NULL DEFAULT false,
   bybit_order_link_id text,
   opened_at timestamptz NOT NULL DEFAULT now(),
@@ -134,9 +137,52 @@ CREATE TABLE IF NOT EXISTS crypto_features_hourly (
   support_1 numeric,
   resistance_1 numeric,
   sr_signal text,
-  sr_strength numeric
+  sr_strength numeric,
+  btc_regime text,
+  btc_structure_4h text,
+  market_mode text,
+  btc_momentum text,
+  relative_strength numeric,
+  volume_bucket text,
+  volatility_bucket text,
+  impulse_score numeric,
+  reversal_score numeric,
+  distance_to_support_pct numeric,
+  distance_to_resistance_pct numeric,
+  is_aggressive_bear boolean DEFAULT false,
+  is_aggressive_bull boolean DEFAULT false,
+  no_long_zone boolean DEFAULT false,
+  no_short_zone boolean DEFAULT false,
+  btc_move_strength numeric,
+  candle_score_long numeric,
+  candle_score_short numeric,
+  in_bullish_fvg boolean DEFAULT false,
+  in_bearish_fvg boolean DEFAULT false,
+  nearest_fvg text,
+  nearest_fvg_dist_pct numeric,
+  in_bullish_ob boolean DEFAULT false,
+  in_bearish_ob boolean DEFAULT false,
+  ms_structure text,
+  ms_bos_bullish boolean DEFAULT false,
+  ms_bos_bearish boolean DEFAULT false,
+  ms_choch_bullish boolean DEFAULT false,
+  ms_choch_bearish boolean DEFAULT false,
+  fib_level numeric,
+  fib_zone text,
+  fib_direction text,
+  fib_dist_pct numeric,
+  fib_score_long numeric,
+  fib_score_short numeric,
+  target_4h smallint
 );
 CREATE INDEX IF NOT EXISTS idx_features_symbol_ts ON crypto_features_hourly(symbol, ts DESC);
+
+CREATE TABLE IF NOT EXISTS crypto_scoring_weights (
+  id text PRIMARY KEY DEFAULT 'current',
+  weights jsonb NOT NULL DEFAULT '{}',
+  entry_threshold integer NOT NULL DEFAULT 45,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS crypto_forecast_runs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -211,6 +257,7 @@ CREATE TABLE IF NOT EXISTS crypto_market_global (
   id text PRIMARY KEY DEFAULT 'latest',
   btc_dominance numeric,
   total_market_cap numeric,
+  features_snapshot jsonb DEFAULT '{}',
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -275,6 +322,12 @@ INSERT INTO crypto_strategy_params (id, version, strategy_mode,
 
 INSERT INTO crypto_fear_greed (id, value, label) VALUES ('latest', 50, 'Neutral') ON CONFLICT (id) DO NOTHING;
 INSERT INTO crypto_market_global (id, btc_dominance) VALUES ('latest', 55) ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO crypto_scoring_weights (id, weights, entry_threshold) VALUES (
+  'current',
+  '{"sr_signal":0.30,"candle_confirmation":0.25,"fvg_fibonacci":0.15,"rsi":0.12,"relative_strength":0.10,"momentum_1h":0.05,"volume":0.03,"ml_signal":0.00}'::jsonb,
+  45
+) ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO crypto_assets (symbol, name, bybit_symbol, rank, is_active) VALUES
 ('BTC','Bitcoin','BTCUSDT',1,true),('ETH','Ethereum','ETHUSDT',2,true),

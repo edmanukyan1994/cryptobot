@@ -499,9 +499,6 @@ async def check_entry(
 
     if volatility_bucket == "extreme":
         return False, "", "extreme_volatility"
-    if rsi is None or rs is None:
-        return False, "", "missing_core_features(rsi_or_rs)"
-
     sr_signal = str(features.get("sr_signal") or "neutral")
     r_1h = float(features.get("r_1h") or 0)
 
@@ -544,20 +541,20 @@ async def check_entry(
     # Дополнительный контроль качества входа:
     # normal-сетап часто давал отрицательное ожидание, поэтому требуем более сильное подтверждение
     if st == "normal":
-        if prob < 60:
-            return False, "", f"normal_needs_prob({prob:.1f}<60)"
-        if scoring_score < 50:
-            return False, "", f"normal_needs_score({scoring_score}<50)"
+        if prob < 55:
+            return False, "", f"normal_needs_prob({prob:.1f}<55)"
+        if scoring_score < 44:
+            return False, "", f"normal_needs_score({scoring_score}<44)"
 
     # Для слабых шорт-сетапов отсекаем входы против импульса/силы
     # (сохраняем поток сделок, но режем самые токсичные комбинации)
     if direction == "short" and st in ("normal", "short_trend"):
-        if rsi < 45:
-            return False, "", f"short_rsi_too_low({rsi:.1f}<45)"
-        if rs > 0.35:
-            return False, "", f"short_rs_too_strong({rs:.2f}>0.35)"
-        if prob < 58:
-            return False, "", f"short_needs_prob({prob:.1f}<58)"
+        if rsi is not None and rsi < 35:
+            return False, "", f"short_rsi_too_low({rsi:.1f}<35)"
+        if rs is not None and rs > 1.20:
+            return False, "", f"short_rs_too_strong({rs:.2f}>1.20)"
+        if prob < 54:
+            return False, "", f"short_needs_prob({prob:.1f}<54)"
 
 
     # В сильном тренде — только импульсный вход

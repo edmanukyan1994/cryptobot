@@ -5,7 +5,7 @@ from config import LOG_LEVEL, DEMO_MODE, DEMO_INITIAL_BALANCE
 import db
 from collector import run_price_collector, get_active_symbols
 from features import run_features_builder
-from forecaster import run_forecaster
+from forecaster import run_forecaster, run_forecast_scorer
 from market_context import run_market_context
 from trader import run_trader, fast_exit_check
 from ws_monitor import run_ws_price_monitor, run_fast_position_checker
@@ -43,6 +43,7 @@ async def main():
         asyncio.create_task(run_price_collector(), name="collector"),
         asyncio.create_task(run_features_builder(), name="features"),
         asyncio.create_task(run_forecaster(), name="forecaster"),
+        asyncio.create_task(run_forecast_scorer(), name="forecast_scorer"),
         asyncio.create_task(run_market_context(), name="market_context"),
         asyncio.create_task(run_trader(), name="trader"),
         asyncio.create_task(run_ws_price_monitor(symbols), name="ws_monitor"),

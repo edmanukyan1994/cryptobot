@@ -14,6 +14,8 @@ from market_context import get_context
 logger = logging.getLogger("forecaster")
 
 HORIZONS = {"1h": 1, "4h": 4, "24h": 24}
+FORECAST_SCORE_INTERVAL = 60
+FORECAST_SCORE_BATCH = 600
 
 BASE_WEIGHTS = {
     "momentum":          0.22,
@@ -571,3 +573,103 @@ async def run_forecaster():
         except Exception as e:
             logger.error(f"Forecaster error: {e}")
         await asyncio.sleep(FORECAST_INTERVAL)
+
+
+async def score_pending_forecasts(batch_size: int = FORECAST_SCORE_BATCH) -> int:
+    """
+    Заполняет crypto_forecast_scores для прогнозов, у которых уже наступил горизонт.
+    """
+    rows = await db.fetch(
+        """
+        SELECT r.id, r.symbol, r.horizon, r.direction, r.p10, r.p90, r.created_at,
+               (r.features_snapshot->>'price')::numeric AS entry_price
+        FROM crypto_forecast_runs r
+        LEFT JOIN crypto_forecast_scores s ON s.forecast_id = r.id
+        WHERE s.forecast_id IS NULL
+          AND (
+            (r.horizon = '1h'  AND r.created_at <= now() - interval '1 hour')
+            OR
+            (r.horizon = '4h'  AND r.created_at <= now() - interval '4 hours')
+            OR
+            (r.horizon = '24h' AND r.created_at <= now() - interval '24 hours')
+          )
+        ORDER BY r.created_at ASC
+        LIMIT $1
+        """,
+        batch_size,
+    )
+    if not rows:
+        return 0
+
+    scored = 0
+    for row in rows:
+        try:
+            horizon = str(row["horizon"])
+            h = HORIZONS.get(horizon)
+            if not h:
+                continue
+
+            actual = await db.fetchrow(
+                """
+                SELECT price
+                FROM crypto_prices_bybit
+                WHERE symbol=$1 AND ts >= $2 + $3::interval
+                ORDER BY ts ASC
+                LIMIT 1
+                """,
+                row["symbol"],
+                row["created_at"],
+                f"{h} hours",
+            )
+            if not actual or actual["price"] is None:
+                continue
+
+            actual_price = float(actual["price"])
+            entry_raw = row["entry_price"]
+            entry_price = float(entry_raw) if entry_raw is not None else None
+
+            direction = str(row["direction"] or "").lower().strip()
+            direction_hit = None
+            if entry_price and entry_price > 0:
+                if direction == "up":
+                    direction_hit = actual_price > entry_price
+                elif direction == "down":
+                    direction_hit = actual_price < entry_price
+
+            p10 = float(row["p10"]) if row["p10"] is not None else None
+            p90 = float(row["p90"]) if row["p90"] is not None else None
+            band_hit = None
+            if p10 is not None and p90 is not None:
+                lo, hi = (p10, p90) if p10 <= p90 else (p90, p10)
+                band_hit = lo <= actual_price <= hi
+
+            await db.execute(
+                """
+                INSERT INTO crypto_forecast_scores
+                (forecast_id, symbol, horizon, direction_hit, band_hit, actual_price, scored_at)
+                VALUES ($1, $2, $3, $4, $5, $6, now())
+                """,
+                row["id"],
+                row["symbol"],
+                horizon,
+                direction_hit,
+                band_hit,
+                actual_price,
+            )
+            scored += 1
+        except Exception as e:
+            logger.warning(f"Forecast score error {row.get('symbol')}/{row.get('horizon')}: {e}")
+
+    return scored
+
+
+async def run_forecast_scorer():
+    logger.info("Forecast scorer started")
+    while True:
+        try:
+            scored = await score_pending_forecasts()
+            if scored:
+                logger.info(f"Forecast scores written: {scored}")
+        except Exception as e:
+            logger.warning(f"Forecast scorer loop error: {e}")
+        await asyncio.sleep(FORECAST_SCORE_INTERVAL)

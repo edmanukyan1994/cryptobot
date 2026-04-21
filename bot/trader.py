@@ -480,9 +480,14 @@ async def check_entry(
     if not direction:
         return False, "", f"no_direction({dir_reason})"
 
+    st = normalize_setup_type(setup_type)
     volume = float(features.get("volume_24h") or 0)
     volume_bucket = str(features.get("volume_bucket") or volume_to_bucket(volume))
     volatility_bucket = str(features.get("volatility_bucket") or "unknown")
+    rsi_raw = features.get("rsi_14")
+    rs_raw = features.get("relative_strength")
+    rsi = float(rsi_raw) if rsi_raw is not None else None
+    rs = float(rs_raw) if rs_raw is not None else None
 
     # Минимальные фильтры (безопасность)
 
@@ -494,6 +499,8 @@ async def check_entry(
 
     if volatility_bucket == "extreme":
         return False, "", "extreme_volatility"
+    if rsi is None or rs is None:
+        return False, "", "missing_core_features(rsi_or_rs)"
 
     sr_signal = str(features.get("sr_signal") or "neutral")
     r_1h = float(features.get("r_1h") or 0)
@@ -526,6 +533,24 @@ async def check_entry(
             return False, "", f"no_shorts_in_bull_sideways"
         if direction == "long" and sr_signal not in ("bounce_support", "breakout_up"):
             return False, "", f"bull_sideways_needs_support(sr={sr_signal})"
+
+    # Дополнительный контроль качества входа:
+    # normal-сетап часто давал отрицательное ожидание, поэтому требуем более сильное подтверждение
+    if st == "normal":
+        if prob < 60:
+            return False, "", f"normal_needs_prob({prob:.1f}<60)"
+        if scoring_score < 50:
+            return False, "", f"normal_needs_score({scoring_score}<50)"
+
+    # Для слабых шорт-сетапов отсекаем входы против импульса/силы
+    # (сохраняем поток сделок, но режем самые токсичные комбинации)
+    if direction == "short" and st in ("normal", "short_trend"):
+        if rsi < 45:
+            return False, "", f"short_rsi_too_low({rsi:.1f}<45)"
+        if rs > 0.35:
+            return False, "", f"short_rs_too_strong({rs:.2f}>0.35)"
+        if prob < 58:
+            return False, "", f"short_needs_prob({prob:.1f}<58)"
 
 
     # В сильном тренде — только импульсный вход

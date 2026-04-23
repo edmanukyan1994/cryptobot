@@ -499,21 +499,73 @@ async def liquidity_usdt_live(symbol: str) -> float | None:
     return v if v > 0 else None
 
 
+def normalize_feature_row(row) -> dict:
+    if not row:
+        return {}
+    return {
+        k: (
+            float(v)
+            if hasattr(v, "__float__") and not isinstance(v, bool) and not isinstance(v, str)
+            else v
+        )
+        for k, v in dict(row).items()
+        if not callable(v)
+    }
+
+
+BTC_BEARISH_PATTERNS = frozenset(
+    {
+        "bearish_engulfing",
+        "bearish_marubozu",
+        "rejection_high",
+        "shooting_star",
+        "hanging_man",
+    }
+)
+
+
+def btc_candle_veto_alt_long(
+    symbol: str,
+    direction: str,
+    market_mode: str,
+    btc: dict | None,
+) -> tuple[bool, str]:
+    """В bull не открываем коррелированный alt-long при явно медвежьей BTC 1h."""
+    if market_mode != "bull" or direction != "long":
+        return True, ""
+    if not btc or symbol == "BTC":
+        return True, ""
+    pat = str(btc.get("candlestick_pattern") or "none").lower()
+    c_long = float(btc.get("candle_score_long") or 0)
+    c_short = float(btc.get("candle_score_short") or 0)
+    r1 = float(btc.get("r_1h") or 0)
+    ms_bear = bool(btc.get("ms_bos_bearish")) or bool(btc.get("ms_choch_bearish"))
+
+    if pat in BTC_BEARISH_PATTERNS and c_short >= c_long + 8:
+        return False, f"btc_bearish_candle_veto(p={pat},cl={c_long:.0f},cs={c_short:.0f})"
+    if ms_bear and c_short >= 12:
+        return False, f"btc_structure_bear_veto(c_short={c_short:.0f})"
+    if r1 <= -0.06 and c_short >= 15:
+        return False, f"btc_hourly_pullback_veto(r_1h={r1:.3f},c_short={c_short:.0f})"
+    return True, ""
+
+
 async def check_entry(
     features: dict,
     forecast: dict,
     params: dict,
     setup_type: str = "normal",
     market_mode: str = "sideways",
-) -> tuple[bool, str, str]:
+    btc_features: dict | None = None,
+) -> tuple[bool, str, str, dict]:
     """Новая версия: только минимальные фильтры + скоринг"""
     if not forecast:
-        return False, "", "no_data"
+        return False, "", "no_data", {}
 
     # Направление определяем из совокупности сигналов
     direction, dir_reason = detect_direction(features, forecast)
     if not direction:
-        return False, "", f"no_direction({dir_reason})"
+        return False, "", f"no_direction({dir_reason})", {}
 
     sym = str(features.get("symbol") or "").strip()
     vol_feat = float(features.get("volume_24h") or 0)
@@ -527,13 +579,13 @@ async def check_entry(
     # Минимальные фильтры (безопасность)
 
     if volume < 500_000:
-        return False, "", f"low_volume({volume:.0f})"
+        return False, "", f"low_volume({volume:.0f})", {}
 
     if volume_bucket == "trash":
-        return False, "", "trash_liquidity"
+        return False, "", "trash_liquidity", {}
 
     if volatility_bucket == "extreme":
-        return False, "", "extreme_volatility"
+        return False, "", "extreme_volatility", {}
     sr_signal = str(features.get("sr_signal") or "neutral")
     r_1h = float(features.get("r_1h") or 0)
 
@@ -545,33 +597,33 @@ async def check_entry(
     except Exception:
         ml_prediction = None
 
-    scoring_should, scoring_score, scoring_reason = await scoring.should_enter(
+    scoring_should, scoring_score, scoring_reason, scoring_audit = await scoring.should_enter(
         features, forecast, market_mode, direction, ml_prediction=ml_prediction
     )
     if not scoring_should:
-        return False, "", f"scoring_reject({scoring_reason})"
+        return False, "", f"scoring_reject({scoring_reason})", scoring_audit
 
     # В боковике — только от S/R уровней (и для нейтрального sideways, см. ARCHITECTURE)
     if market_mode in ("bear_sideways", "sideways"):
         if direction == "short" and sr_signal != "bounce_resistance":
-            return False, "", f"sideways_needs_resistance(sr={sr_signal})"
+            return False, "", f"sideways_needs_resistance(sr={sr_signal})", scoring_audit
         if direction == "long" and sr_signal not in ("bounce_support", "breakout_up"):
-            return False, "", f"sideways_needs_support(sr={sr_signal})"
+            return False, "", f"sideways_needs_support(sr={sr_signal})", scoring_audit
 
     # В bull — только лонги, шорты запрещены
     # Лонги только при r_1h <= 0.05% (не входим на разогнанных монетах)
     if market_mode == "bull":
         if direction == "short":
-            return False, "", f"no_shorts_in_bull"
+            return False, "", f"no_shorts_in_bull", scoring_audit
         if direction == "long" and r_1h > 0.05:
-            return False, "", f"bull_long_needs_flat_r1h({r_1h:.3f}>0.05)"
+            return False, "", f"bull_long_needs_flat_r1h({r_1h:.3f}>0.05)", scoring_audit
 
     # В bull_sideways — только лонги от поддержки, шорты запрещены
     if market_mode == "bull_sideways":
         if direction == "short":
-            return False, "", f"no_shorts_in_bull_sideways"
+            return False, "", f"no_shorts_in_bull_sideways", scoring_audit
         if direction == "long" and sr_signal not in ("bounce_support", "breakout_up"):
-            return False, "", f"bull_sideways_needs_support(sr={sr_signal})"
+            return False, "", f"bull_sideways_needs_support(sr={sr_signal})", scoring_audit
 
     # Доп. фильтры по prob/score/SR убраны: после прохождения скоринга они почти всегда
     # дублировали жёсткий SR-гейт в trading_cycle и обнуляли поток сделок.
@@ -579,13 +631,17 @@ async def check_entry(
 
     # В сильном тренде — только импульсный вход
     if market_mode == "bear" and direction == "short" and r_1h > -0.3:
-        return False, "", f"bear_needs_impulse(r_1h={r_1h:.3f})"
+        return False, "", f"bear_needs_impulse(r_1h={r_1h:.3f})", scoring_audit
     # В bull выше: не лонговать сильно разогнанную свечу (r_1h>0.05). Ниже не требовать
     # «положительный импульс» — иначе вместе с порогом выше отсекается всё кроме r_1h≈0.05.
     if market_mode == "bull" and direction == "long" and r_1h < -0.12:
-        return False, "", f"bull_avoid_dump(r_1h={r_1h:.3f})"
+        return False, "", f"bull_avoid_dump(r_1h={r_1h:.3f})", scoring_audit
 
-    return True, direction, f"scoring({scoring_score}):{scoring_reason}"
+    ok_btc, btc_veto = btc_candle_veto_alt_long(sym, direction, market_mode, btc_features)
+    if not ok_btc:
+        return False, "", btc_veto, scoring_audit
+
+    return True, direction, f"scoring({scoring_score}):{scoring_reason}", scoring_audit
 
 
 async def can_reenter(symbol: str, direction: str, forecast: dict, forecast_max_age_min: float = 45.0) -> tuple[bool, str]:
@@ -718,6 +774,7 @@ async def open_trade(
     entry_reason="",
     sl_price_override=None,
     market_mode="sideways",
+    scoring_audit=None,
 ):
     if not price or price <= 0:
         logger.warning(f"Invalid price {symbol}: {price}")
@@ -799,6 +856,8 @@ async def open_trade(
         "distance_to_resistance_pct": features.get("distance_to_resistance_pct"),
         "entry_reason": str(entry_reason or ""),
     }
+    if scoring_audit:
+        entry_features["scoring_audit"] = scoring_audit
 
     row = await db.fetchrow(
         """INSERT INTO crypto_demo_trades
@@ -1172,10 +1231,15 @@ async def trading_cycle():
     ]
     logger.info(f"Cycle candidates prepared: {len(candidates)}")
 
-    btc_mode_row = await db.fetchrow(
-        "SELECT market_mode FROM crypto_features_hourly WHERE symbol='BTC' ORDER BY ts DESC LIMIT 1"
+    btc_feat_row = await db.fetchrow(
+        "SELECT * FROM crypto_features_hourly WHERE symbol='BTC' ORDER BY ts DESC LIMIT 1"
     )
-    current_market_mode = str(btc_mode_row["market_mode"]) if btc_mode_row and btc_mode_row["market_mode"] else "sideways"
+    current_market_mode = (
+        str(btc_feat_row["market_mode"])
+        if btc_feat_row and btc_feat_row["market_mode"]
+        else "sideways"
+    )
+    btc_features = normalize_feature_row(btc_feat_row) if btc_feat_row else None
     new_per_cycle_limit = SCALP_MAX_NEW_PER_CYCLE if current_market_mode == "bear_sideways" else MAX_NEW_PER_CYCLE
 
     new_trades = 0
@@ -1213,7 +1277,9 @@ async def trading_cycle():
 
             market_mode = detect_market_mode(features, forecast)
             setup_type = detect_setup_type(features, forecast)
-            should, direction, reason = await check_entry(features, forecast, params, setup_type, market_mode)
+            should, direction, reason, scoring_audit = await check_entry(
+                features, forecast, params, setup_type, market_mode, btc_features=btc_features
+            )
 
             if not should:
                 if reason not in ("neutral_forecast", "no_data"):
@@ -1317,6 +1383,7 @@ async def trading_cycle():
                 reason,
                 sr_sl_price,
                 market_mode=market_mode,
+                scoring_audit=scoring_audit,
             )
             if trade:
                 new_trades += 1

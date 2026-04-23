@@ -213,21 +213,28 @@ def _score_fvg_fibonacci(features: dict, is_long: bool) -> int:
     return max(-100, min(100, score))
 
 
-async def calculate_score(features: dict, direction: str, market_mode: str, ml_forecast: dict = None) -> int:
+async def _compute_score_bundle(
+    features: dict,
+    direction: str,
+    market_mode: str,
+    ml_forecast: dict | None,
+) -> tuple[int, dict]:
+    """Итоговый скор + JSON-сериализуемый разбор для записи в сделку."""
     is_long = direction == "long"
     weights_data = await get_weights()
     weights = weights_data["weights"]
 
-    # Конвертируем asyncpg Record в dict
     if not isinstance(features, dict):
         try:
             features = dict(features)
         except Exception:
-            pass
+            features = {}
 
     def _f(v):
-        try: return float(v) if v is not None else None
-        except: return None
+        try:
+            return float(v) if v is not None else None
+        except Exception:
+            return None
 
     rsi = _f(features.get("rsi_14"))
     r_1h = _f(features.get("r_1h"))
@@ -235,26 +242,23 @@ async def calculate_score(features: dict, direction: str, market_mode: str, ml_f
     sr_signal = str(features.get("sr_signal") or "neutral")
     rs = _f(features.get("relative_strength"))
 
-    # Свечной скор (уже вычислен в features включая FVG+OB+MS)
     if is_long:
         candle_composite = int(features.get("candle_score_long") or 0)
     else:
         candle_composite = int(features.get("candle_score_short") or 0)
 
-    # FVG + Fibonacci комбинированный скор
     fvg_fib_score = _score_fvg_fibonacci(features, is_long)
 
     scores = {
-        "sr_signal":           _score_sr_signal(sr_signal, is_long),
+        "sr_signal": _score_sr_signal(sr_signal, is_long),
         "candle_confirmation": candle_composite,
-        "fvg_fibonacci":       fvg_fib_score,
-        "rsi":                 _score_rsi(rsi, is_long),
-        "relative_strength":   _score_relative_strength(rs, is_long),
-        "momentum_1h":         _score_momentum_1h(r_1h, is_long),
-        "volume":              _score_volume(volume_bucket),
+        "fvg_fibonacci": fvg_fib_score,
+        "rsi": _score_rsi(rsi, is_long),
+        "relative_strength": _score_relative_strength(rs, is_long),
+        "momentum_1h": _score_momentum_1h(r_1h, is_long),
+        "volume": _score_volume(volume_bucket),
     }
 
-    # ML фактор
     ml_score = 0
     if ml_forecast:
         ml_dir = ml_forecast.get("direction")
@@ -267,25 +271,51 @@ async def calculate_score(features: dict, direction: str, market_mode: str, ml_f
             ml_score = -15
     scores["ml_signal"] = ml_score
 
-    # Базовый скор
-    base_score = sum(float(score) * float(weights.get(factor, 0.0)) for factor, score in scores.items())
+    weighted = {
+        k: round(float(scores[k]) * float(weights.get(k, 0.0)), 4) for k in scores
+    }
+    base_score = sum(weighted.values())
 
-    # market_mode мультипликатор — симметрично
     if is_long:
-        if market_mode == "bull":            mult = 1.2
-        elif market_mode == "bull_sideways": mult = 1.1
-        elif market_mode == "sideways":      mult = 1.0
-        elif market_mode == "bear_sideways": mult = 0.9
-        else:                                mult = 0.8
+        if market_mode == "bull":
+            mult = 1.2
+        elif market_mode == "bull_sideways":
+            mult = 1.1
+        elif market_mode == "sideways":
+            mult = 1.0
+        elif market_mode == "bear_sideways":
+            mult = 0.9
+        else:
+            mult = 0.8
     else:
-        if market_mode == "bear":            mult = 1.2
-        elif market_mode == "bear_sideways": mult = 1.1
-        elif market_mode == "sideways":      mult = 1.0
-        elif market_mode == "bull_sideways": mult = 0.9
-        else:                                mult = 0.8
+        if market_mode == "bear":
+            mult = 1.2
+        elif market_mode == "bear_sideways":
+            mult = 1.1
+        elif market_mode == "sideways":
+            mult = 1.0
+        elif market_mode == "bull_sideways":
+            mult = 0.9
+        else:
+            mult = 0.8
 
     final_score = min(100, max(0, int(base_score * mult)))
+    breakdown = {
+        "direction": direction,
+        "market_mode": market_mode,
+        "factor_scores": {k: int(v) for k, v in scores.items()},
+        "weights": {k: float(weights.get(k, 0.0)) for k in scores},
+        "weighted": weighted,
+        "base_score": round(base_score, 4),
+        "market_mult": mult,
+        "final_score": int(final_score),
+    }
     logger.debug(f"Score {direction}: {final_score} (base={base_score:.1f} mult={mult}) | {scores}")
+    return final_score, breakdown
+
+
+async def calculate_score(features: dict, direction: str, market_mode: str, ml_forecast: dict = None) -> int:
+    final_score, _ = await _compute_score_bundle(features, direction, market_mode, ml_forecast)
     return final_score
 
 
@@ -293,8 +323,9 @@ async def should_enter_long(features: dict, forecast: dict, market_mode: str, ml
     if ml_prediction is None:
         from ml_client import get_ml_prediction
         ml_prediction = await get_ml_prediction(features)
-    score = await calculate_score(features, "long", market_mode, ml_forecast=ml_prediction)
+    score, breakdown = await _compute_score_bundle(features, "long", market_mode, ml_prediction)
     threshold = await get_entry_threshold()
+    breakdown["threshold"] = int(threshold)
     weights = await get_weights()
     ml_weight = float(weights.get("weights", {}).get("ml_signal", 0.0))
 
@@ -302,35 +333,40 @@ async def should_enter_long(features: dict, forecast: dict, market_mode: str, ml
     dist = float(features.get("distance_to_support_pct")) if features.get("distance_to_support_pct") is not None else None
     volume_bucket = features.get("volume_bucket") or "low"
 
-    # Экстремальная перепроданность у уровня — приоритетный вход
     if rsi is not None and rsi <= 20 and dist is not None and dist <= 0.5:
         if volume_bucket not in ("trash", "low"):
-            return True, score, f"extreme_oversold_rsi={rsi:.1f}_dist={dist:.2f}"
+            breakdown["entry_path"] = "extreme_oversold"
+            return True, score, f"extreme_oversold_rsi={rsi:.1f}_dist={dist:.2f}", breakdown
 
     ml_dir = (ml_prediction or {}).get("direction")
     ml_prob = float((ml_prediction or {}).get("direction_probability") or 0)
 
-    # Если ML-вес отключён, не блокируем вход направлением ML.
     if ml_weight <= 0:
         if score >= threshold:
-            return True, score, f"score={score}_th={threshold}_ml_off"
-        return False, score, f"score={score}<{threshold}_ml_off"
+            breakdown["entry_path"] = "threshold_ml_off"
+            return True, score, f"score={score}_th={threshold}_ml_off", breakdown
+        breakdown["entry_path"] = "reject_below_threshold_ml_off"
+        return False, score, f"score={score}<{threshold}_ml_off", breakdown
 
     if ml_dir in ("up", "neutral", None):
         if score >= threshold:
-            return True, score, f"score={score}_ml={ml_dir}({ml_prob:.0f})"
-        elif score >= threshold - 8 and ml_prob >= 65:
-            return True, score, f"score={score}_ml_boost"
+            breakdown["entry_path"] = "threshold_ml_ok"
+            return True, score, f"score={score}_ml={ml_dir}({ml_prob:.0f})", breakdown
+        if score >= threshold - 8 and ml_prob >= 65:
+            breakdown["entry_path"] = "ml_boost"
+            return True, score, f"score={score}_ml_boost", breakdown
 
-    return False, score, f"score={score}<{threshold}_or_dir={ml_dir}"
+    breakdown["entry_path"] = "reject_ml_dir"
+    return False, score, f"score={score}<{threshold}_or_dir={ml_dir}", breakdown
 
 
 async def should_enter_short(features: dict, forecast: dict, market_mode: str, ml_prediction: dict = None) -> tuple:
     if ml_prediction is None:
         from ml_client import get_ml_prediction
         ml_prediction = await get_ml_prediction(features)
-    score = await calculate_score(features, "short", market_mode, ml_forecast=ml_prediction)
+    score, breakdown = await _compute_score_bundle(features, "short", market_mode, ml_prediction)
     threshold = await get_entry_threshold()
+    breakdown["threshold"] = int(threshold)
     weights = await get_weights()
     ml_weight = float(weights.get("weights", {}).get("ml_signal", 0.0))
 
@@ -338,32 +374,36 @@ async def should_enter_short(features: dict, forecast: dict, market_mode: str, m
     dist = float(features.get("distance_to_resistance_pct")) if features.get("distance_to_resistance_pct") is not None else None
     volume_bucket = features.get("volume_bucket") or "low"
 
-    # Экстремальная перекупленность у уровня — приоритетный вход
     if rsi is not None and rsi >= 80 and dist is not None and dist <= 0.5:
         if volume_bucket not in ("trash", "low"):
-            return True, score, f"extreme_overbought_rsi={rsi:.1f}_dist={dist:.2f}"
+            breakdown["entry_path"] = "extreme_overbought"
+            return True, score, f"extreme_overbought_rsi={rsi:.1f}_dist={dist:.2f}", breakdown
 
     ml_dir = (ml_prediction or {}).get("direction")
     ml_prob = float((ml_prediction or {}).get("direction_probability") or 0)
 
-    # Если ML-вес отключён, не блокируем вход направлением ML.
     if ml_weight <= 0:
         if score >= threshold:
-            return True, score, f"score={score}_th={threshold}_ml_off"
-        return False, score, f"score={score}<{threshold}_ml_off"
+            breakdown["entry_path"] = "threshold_ml_off"
+            return True, score, f"score={score}_th={threshold}_ml_off", breakdown
+        breakdown["entry_path"] = "reject_below_threshold_ml_off"
+        return False, score, f"score={score}<{threshold}_ml_off", breakdown
 
     if ml_dir in ("down", "neutral", None):
         if score >= threshold:
-            return True, score, f"score={score}_ml={ml_dir}({ml_prob:.0f})"
-        elif score >= threshold - 8 and ml_prob >= 65:
-            return True, score, f"score={score}_ml_boost"
+            breakdown["entry_path"] = "threshold_ml_ok"
+            return True, score, f"score={score}_ml={ml_dir}({ml_prob:.0f})", breakdown
+        if score >= threshold - 8 and ml_prob >= 65:
+            breakdown["entry_path"] = "ml_boost"
+            return True, score, f"score={score}_ml_boost", breakdown
 
-    return False, score, f"score={score}<{threshold}_or_dir={ml_dir}"
+    breakdown["entry_path"] = "reject_ml_dir"
+    return False, score, f"score={score}<{threshold}_or_dir={ml_dir}", breakdown
 
 
 async def should_enter(features: dict, forecast: dict, market_mode: str, direction: str, ml_prediction: dict = None) -> tuple:
     if direction == "long":
         return await should_enter_long(features, forecast, market_mode, ml_prediction=ml_prediction)
-    elif direction == "short":
+    if direction == "short":
         return await should_enter_short(features, forecast, market_mode, ml_prediction=ml_prediction)
-    return False, 0, f"invalid_direction={direction}"
+    return False, 0, f"invalid_direction={direction}", {}
